@@ -33,6 +33,31 @@ export interface Block {
   updated_at: string
 }
 
+/** 搜索结果（FR-05） */
+export interface SearchBlockHit {
+  block_id: number
+  document_id: number
+  document_name: string
+  block_title: string
+  is_sub: boolean
+  created_at: string
+  work_start_time: string | null
+  digest: string
+}
+
+export interface SearchDocHit {
+  document_id: number
+  document_name: string
+  updated_at: string
+  block_count: number
+}
+
+export interface SearchResult {
+  blocks: SearchBlockHit[]
+  documents: SearchDocHit[]
+  total: number
+}
+
 /** 内容块（任务块 content JSON 数组的元素） */
 export interface ContentBlock {
   type: 'text' | 'code' | 'shell' | 'output' | 'image' | 'todo' | 'table'

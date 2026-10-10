@@ -4,7 +4,7 @@ import { useRouter } from 'vue-router'
 import { useAppStore } from '@/stores/app'
 import { api } from '@/composables/useApi'
 import ConfirmDialog from '@/components/ConfirmDialog.vue'
-import type { Folder, Document } from '@/types'
+import type { Folder, Document, SearchResult } from '@/types'
 
 const router = useRouter()
 const store = useAppStore()
@@ -52,6 +52,13 @@ onMounted(async () => {
   if (def) {
     store.currentFolderId = def.id
     await store.loadDocuments(def.id)
+  }
+  // 最近工作文档（"继续上次工作"入口）
+  try {
+    const r = await api.get<{ document: { id: number; name: string; last_position: string | null } | null }>('/search/last-work')
+    lastDoc.value = r.document
+  } catch {
+    lastDoc.value = null
   }
 })
 
@@ -196,14 +203,92 @@ function cancelMoveFolder() {
   moveFolderTarget.value = null
   moveFolderParentId.value = null
 }
+
+// ── 搜索与上下文恢复（FR-05）──
+const searchQuery = ref('')
+const searchDate = ref('')
+const searchResult = ref<SearchResult | null>(null)
+const searching = ref(false)
+const searchError = ref('')
+
+const hasSearchTerms = computed(() => searchQuery.value.trim() !== '' || searchDate.value !== '')
+
+async function doSearch() {
+  const q = searchQuery.value.trim()
+  const date = searchDate.value
+  if (!q && !date) return
+  searching.value = true
+  searchError.value = ''
+  try {
+    const params = new URLSearchParams()
+    if (q) params.set('q', q)
+    if (date) params.set('date', date)
+    searchResult.value = await api.get<SearchResult>(`/search?${params.toString()}`)
+  } catch {
+    searchError.value = '搜索失败，请重试'
+    searchResult.value = null
+  } finally {
+    searching.value = false
+  }
+}
+
+function clearSearch() {
+  searchQuery.value = ''
+  searchDate.value = ''
+  searchResult.value = null
+  searchError.value = ''
+}
+
+/** 关键词高亮：按搜索词把文本拆成片段数组，命中的片段由模板渲染为 mark。 */
+function highlightParts(text: string): (string | { hit: string })[] {
+  const terms = searchQuery.value.trim().split(/\s+/).filter(Boolean)
+  if (!terms.length) return [text]
+  const escaped = terms.map(t => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+  const lowers = terms.map(t => t.toLowerCase())
+  const re = new RegExp(`(${escaped.join('|')})`, 'gi')
+  return text.split(re).map(part => (lowers.includes(part.toLowerCase()) ? { hit: part } : part))
+}
+
+// ── 继续上次工作 ──
+const lastDoc = ref<{ id: number; name: string; last_position: string | null } | null>(null)
+
+function parseBlockId(raw: string | null): number {
+  try {
+    return Number(JSON.parse(raw || '')?.block_id) || 0
+  } catch {
+    return 0
+  }
+}
+
+function continueLastWork() {
+  if (!lastDoc.value) return
+  const pos = parseBlockId(lastDoc.value.last_position)
+  router.push(pos ? `/document/${lastDoc.value.id}?block=${pos}` : `/document/${lastDoc.value.id}`)
+}
 </script>
 
 <template>
   <div class="home">
     <header class="home-header">
       <h1>WorkMark</h1>
+      <button v-if="lastDoc" class="last-work-btn" @click="continueLastWork" title="恢复上次停留位置">
+        ▸ 继续上次工作：{{ lastDoc.name }}
+      </button>
       <button class="primary" @click="handleNewDocument">+ 新建文档</button>
     </header>
+
+    <!-- 搜索栏（FR-05：关键词 + 日期，可组合） -->
+    <div class="search-bar">
+      <input
+        v-model="searchQuery"
+        class="search-input"
+        placeholder="搜索：文档名 / 块标题 / 正文 / 代码 / 命令 / 输出（空格分隔多关键词）"
+        @keyup.enter="doSearch"
+      />
+      <input v-model="searchDate" type="date" class="search-date" title="按日期浏览（创建/工作开始日期）" @change="doSearch" />
+      <button class="primary" @click="doSearch">搜索</button>
+      <button v-if="hasSearchTerms" @click="clearSearch">清除</button>
+    </div>
 
     <div class="home-body">
       <!-- 文件夹侧栏 -->
@@ -246,8 +331,62 @@ function cancelMoveFolder() {
         </div>
       </aside>
 
-      <!-- 文档列表 -->
+      <!-- 文档列表 / 搜索结果 -->
       <main class="content">
+        <!-- 搜索结果面板 -->
+        <div v-if="hasSearchTerms" class="search-results">
+          <div v-if="searching" class="empty">搜索中…</div>
+          <div v-else-if="searchError" class="empty">{{ searchError }}</div>
+          <template v-else-if="searchResult">
+            <div class="search-summary">
+              共 {{ searchResult.total }} 个块 / {{ searchResult.documents.length }} 个文档命中
+              <template v-if="searchDate">（日期：{{ searchDate }}）</template>
+            </div>
+
+            <div v-if="searchResult.total === 0 && searchResult.documents.length === 0" class="empty">
+              无匹配结果。
+            </div>
+
+            <!-- 文档名命中 -->
+            <ul v-if="searchResult.documents.length" class="doc-hit-list">
+              <li
+                v-for="d in searchResult.documents"
+                :key="'doc-' + d.document_id"
+                class="doc-hit"
+                @click="router.push(`/document/${d.document_id}`)"
+              >
+                <span class="hit-doc-icon">📄</span>
+                <span class="hit-doc-name">{{ d.document_name }}</span>
+                <span class="hit-meta">{{ d.block_count }} 块 · 更新于 {{ d.updated_at }}</span>
+              </li>
+            </ul>
+
+            <!-- 块命中 -->
+            <ul v-if="searchResult.blocks.length" class="block-hit-list">
+              <li
+                v-for="b in searchResult.blocks"
+                :key="'blk-' + b.block_id"
+                class="block-hit"
+                @click="router.push(`/document/${b.document_id}?block=${b.block_id}`)"
+              >
+                <div class="block-hit-head">
+                  <span class="hit-doc-tag">{{ b.document_name }}</span>
+                  <span class="hit-block-title">{{ b.is_sub ? '└ ' : '' }}{{ b.block_title }}</span>
+                  <span class="hit-meta">{{ b.work_start_time ? '工作 ' + b.work_start_time.replace('T', ' ') : b.created_at }}</span>
+                </div>
+                <div class="block-hit-digest">
+                  <template v-for="(part, i) in highlightParts(b.digest)" :key="i">
+                    <mark v-if="typeof part === 'object'">{{ part.hit }}</mark>
+                    <template v-else>{{ part }}</template>
+                  </template>
+                </div>
+              </li>
+            </ul>
+          </template>
+        </div>
+
+        <!-- 常规文档列表 -->
+        <template v-else>
         <div class="new-doc-bar">
           <input v-model="newDocName" placeholder="文档名称（可选）" @keyup.enter="handleNewDocument" />
           <button class="primary" @click="handleNewDocument">创建</button>
@@ -278,6 +417,7 @@ function cancelMoveFolder() {
             </template>
           </li>
         </ul>
+        </template>
       </main>
     </div>
 
@@ -331,15 +471,17 @@ function cancelMoveFolder() {
 </template>
 
 <style scoped>
+.home { display: flex; flex-direction: column; height: 100vh; }
 .home-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  gap: 12px;
   padding: 16px 24px;
   border-bottom: 1px solid var(--border);
 }
 .home-header h1 { font-size: 1.4rem; }
-.home-body { display: flex; height: calc(100vh - 65px); }
+.home-body { display: flex; flex: 1; min-height: 0; }
 .sidebar {
   width: 240px;
   padding: 16px;
@@ -420,4 +562,67 @@ function cancelMoveFolder() {
 .dialog-title { font-size: 1.1rem; font-weight: 600; margin-bottom: 8px; }
 .dialog-message { color: var(--muted); margin-bottom: 12px; font-size: 0.9rem; }
 .dialog-actions { display: flex; gap: 8px; justify-content: flex-end; }
+
+/* 搜索栏与结果（FR-05） */
+.home-header h1 { margin-right: auto; }
+.last-work-btn {
+  border: 1px solid var(--accent);
+  background: var(--accent-light);
+  color: var(--accent);
+  padding: 6px 14px;
+  border-radius: var(--radius);
+  font-size: 0.88rem;
+  max-width: 360px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.last-work-btn:hover { background: #e2e8ff; }
+.search-bar {
+  display: flex;
+  gap: 8px;
+  padding: 12px 24px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-alt);
+}
+.search-input { flex: 1; }
+.search-date { width: 160px; }
+.search-results { overflow-y: auto; }
+.search-summary { color: var(--muted); font-size: 0.85rem; margin-bottom: 12px; }
+.doc-hit-list, .block-hit-list { list-style: none; margin-bottom: 16px; }
+.doc-hit {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  margin-bottom: 6px;
+  cursor: pointer;
+  background: var(--bg);
+}
+.doc-hit:hover { border-color: var(--accent); box-shadow: var(--shadow); }
+.hit-doc-name { font-weight: 600; flex: 1; }
+.hit-meta { color: var(--muted); font-size: 0.8rem; white-space: nowrap; }
+.block-hit {
+  padding: 10px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  margin-bottom: 6px;
+  cursor: pointer;
+  background: var(--bg);
+}
+.block-hit:hover { border-color: var(--accent); box-shadow: var(--shadow); }
+.block-hit-head { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
+.hit-doc-tag {
+  background: var(--accent-light);
+  color: var(--accent);
+  font-size: 0.75rem;
+  padding: 1px 8px;
+  border-radius: 10px;
+  white-space: nowrap;
+}
+.hit-block-title { font-weight: 500; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.block-hit-digest { color: var(--muted); font-size: 0.85rem; line-height: 1.5; }
+.block-hit-digest mark { background: #fff3bf; color: inherit; padding: 0 1px; border-radius: 2px; }
 </style>

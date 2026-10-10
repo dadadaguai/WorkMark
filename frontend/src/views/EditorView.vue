@@ -1,12 +1,13 @@
 <script setup lang="ts">
-import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
-import { useRouter, onBeforeRouteLeave } from 'vue-router'
+import { ref, computed, watch, nextTick, onMounted, onUnmounted } from 'vue'
+import { useRouter, useRoute, onBeforeRouteLeave } from 'vue-router'
 import { api } from '@/composables/useApi'
 import ContentEditor from '@/components/ContentEditor.vue'
 import type { Document, Block, ContentBlock } from '@/types'
 
 const props = defineProps<{ id: string }>()
 const router = useRouter()
+const route = useRoute()
 
 const doc = ref<Document | null>(null)
 const blocks = ref<Block[]>([])
@@ -41,7 +42,36 @@ function saveBlockAsTemplate(block: Block) {
 onMounted(async () => {
   doc.value = await api.get<Document>(`/documents/${props.id}`)
   blocks.value = await api.get<Block[]>(`/blocks/document/${props.id}`)
+  // 恢复停留位置：URL ?block= 优先，其次文档 last_position
+  const fromQuery = Number(route.query.block) || 0
+  const target = fromQuery || parseLastPosition(doc.value.last_position)
+  if (target) focusBlock(target)
 })
+
+/** 解析 last_position JSON（容错），返回 block_id 或 0。 */
+function parseLastPosition(raw: string | null): number {
+  if (!raw) return 0
+  try {
+    const pos = JSON.parse(raw)
+    return Number(pos?.block_id) || 0
+  } catch {
+    return 0
+  }
+}
+
+/** 滚动定位到指定块并短暂高亮。 */
+function focusBlock(blockId: number) {
+  sortMode.value = 'doc'
+  collapsedView.value = false
+  nextTick(() => {
+    const el = document.querySelector(`[data-block-id="${blockId}"]`)
+    if (el) {
+      el.scrollIntoView({ block: 'center' })
+      el.classList.add('block-highlight')
+      window.setTimeout(() => el.classList.remove('block-highlight'), 2000)
+    }
+  })
+}
 
 async function reloadBlocks() {
   blocks.value = await api.get<Block[]>(`/blocks/document/${props.id}`)
@@ -301,13 +331,25 @@ onUnmounted(() => {
   flushSaves()
 })
 
-// 切换文档（路由离开）前自动保存
+// 切换文档（路由离开）前：flush 保存 + 记录停留位置（last_position）
+const lastEditedBlockId = ref<number | null>(null)
+
 onBeforeRouteLeave(async () => {
   await flushSaves()
+  if (lastEditedBlockId.value !== null) {
+    try {
+      await api.put(`/documents/${props.id}`, {
+        last_position: JSON.stringify({ block_id: lastEditedBlockId.value }),
+      })
+    } catch {
+      // last_position 保存失败不阻塞导航
+    }
+  }
 })
 
 async function updateBlockTitle(block: Block, title: string) {
   block.title = title
+  lastEditedBlockId.value = block.id
   pendingUpdates.set(block.id, { ...(pendingUpdates.get(block.id) || {}), title })
   scheduleFlush()
 }
@@ -316,6 +358,7 @@ async function updateBlockTitle(block: Block, title: string) {
 function updateBlockTime(block: Block, field: 'work_start_time' | 'work_end_time', value: string) {
   const v = value || null
   block[field] = v
+  lastEditedBlockId.value = block.id
   pendingUpdates.set(block.id, { ...(pendingUpdates.get(block.id) || {}), [field]: v })
   scheduleFlush()
 }
@@ -323,6 +366,7 @@ function updateBlockTime(block: Block, field: 'work_start_time' | 'work_end_time
 function updateBlockContent(block: Block, content: string) {
   recordContentChange(block.id, block.content, content)
   applyContent(block.id, content)
+  lastEditedBlockId.value = block.id
 }
 
 // ── 拖拽排序（同级重排 + 父子层级调整 + 落点提示）──
@@ -459,6 +503,7 @@ async function onDrop(block: Block, e: DragEvent) {
           <div
             class="block-card"
             :class="dropClass(top)"
+            :data-block-id="top.id"
             :draggable="sortMode === 'doc'"
             @dragstart="onDragStart(top, $event)"
             @dragend="onDragEnd"
@@ -515,6 +560,7 @@ async function onDrop(block: Block, e: DragEvent) {
             :key="child.id"
             class="block-card sub-block"
             :class="dropClass(child)"
+            :data-block-id="child.id"
             :draggable="sortMode === 'doc'"
             @dragstart="onDragStart(child, $event)"
             @dragend="onDragEnd"
@@ -686,4 +732,13 @@ async function onDrop(block: Block, e: DragEvent) {
   text-overflow: ellipsis;
 }
 .block-summary:hover { color: var(--fg); background: var(--border); border-radius: 3px; }
+
+/* 块定位高亮（搜索跳转/位置恢复） */
+.block-card.block-highlight {
+  animation: block-flash 2s ease-out;
+}
+@keyframes block-flash {
+  0%, 50% { outline: 2px solid var(--accent); outline-offset: 2px; background: var(--accent-light); }
+  100% { outline: none; background: var(--bg); }
+}
 </style>

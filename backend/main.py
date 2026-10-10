@@ -43,11 +43,12 @@ def teardown_request(exc):
 
 
 # 注册 Blueprint 路由
-from backend.routers import folders, documents, blocks  # noqa: E402
+from backend.routers import folders, documents, blocks, search  # noqa: E402
 
 app.register_blueprint(folders.bp, url_prefix="/api/folders")
 app.register_blueprint(documents.bp, url_prefix="/api/documents")
 app.register_blueprint(blocks.bp, url_prefix="/api/blocks")
+app.register_blueprint(search.bp, url_prefix="/api/search")
 
 
 @app.route("/api/health")
