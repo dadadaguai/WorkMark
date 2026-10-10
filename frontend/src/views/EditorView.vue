@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
-import { useRouter } from 'vue-router'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { useRouter, onBeforeRouteLeave } from 'vue-router'
 import { api } from '@/composables/useApi'
 import ContentEditor from '@/components/ContentEditor.vue'
 import type { Document, Block } from '@/types'
@@ -93,14 +93,136 @@ async function copyBlock(block: Block) {
   await reloadBlocks()
 }
 
-async function updateBlockTitle(block: Block, title: string) {
-  await api.put(`/blocks/${block.id}`, { title })
-  block.title = title
+// ── 自动保存（防抖）+ 保存状态 + 撤销/重做 ──
+type SaveState = 'idle' | 'pending' | 'saving' | 'saved' | 'error'
+const saveState = ref<SaveState>('idle')
+const SAVE_DELAY = 800
+let saveTimer: number | null = null
+const pendingUpdates = new Map<number, { title?: string; content?: string }>()
+
+const saveStateText = computed(() => ({
+  idle: '', pending: '有未保存更改', saving: '保存中…', saved: '已保存 ✓', error: '保存失败，请重试',
+}[saveState.value]))
+
+function setSaveState(s: SaveState) { saveState.value = s }
+
+function scheduleFlush() {
+  setSaveState('pending')
+  if (saveTimer !== null) clearTimeout(saveTimer)
+  saveTimer = window.setTimeout(flushSaves, SAVE_DELAY)
 }
 
-async function updateBlockContent(block: Block, content: string) {
-  await api.put(`/blocks/${block.id}`, { content })
+async function flushSaves(): Promise<void> {
+  if (saveTimer !== null) { clearTimeout(saveTimer); saveTimer = null }
+  if (pendingUpdates.size === 0) return
+  const entries = [...pendingUpdates.entries()]
+  pendingUpdates.clear()
+  setSaveState('saving')
+  try {
+    for (const [id, data] of entries) {
+      await api.put(`/blocks/${id}`, data)
+    }
+    setSaveState('saved')
+  } catch {
+    // 失败的更新放回队列，等待下次触发
+    for (const [id, data] of entries) {
+      pendingUpdates.set(id, { ...(pendingUpdates.get(id) || {}), ...data })
+    }
+    setSaveState('error')
+  }
+}
+
+interface UndoPatch { blockId: number; before: string; after: string }
+const undoStack = ref<UndoPatch[]>([])
+const redoStack = ref<UndoPatch[]>([])
+const UNDO_LIMIT = 100
+const UNDO_COALESCE_MS = 1000
+// 最近一次记录的 patch 引用（用于把连续输入合并为一个撤销步骤）
+let lastPatch: (UndoPatch & { at: number }) | null = null
+
+function recordContentChange(blockId: number, before: string, after: string) {
+  if (before === after) return
+  const now = Date.now()
+  if (lastPatch && lastPatch.blockId === blockId && now - lastPatch.at < UNDO_COALESCE_MS) {
+    // 同一块的连续输入：合并为单个撤销步骤（撤销粒度 = 输入停顿）
+    lastPatch.after = after
+    lastPatch.at = now
+  } else {
+    const patch: UndoPatch & { at: number } = { blockId, before, after, at: now }
+    undoStack.value.push(patch)
+    lastPatch = patch
+    if (undoStack.value.length > UNDO_LIMIT) undoStack.value.shift()
+  }
+  redoStack.value = []
+}
+
+function applyContent(blockId: number, content: string) {
+  const block = blocks.value.find(b => b.id === blockId)
+  if (!block) return
   block.content = content
+  pendingUpdates.set(blockId, { ...(pendingUpdates.get(blockId) || {}), content })
+  scheduleFlush()
+}
+
+function undo() {
+  const p = undoStack.value.pop()
+  lastPatch = null
+  if (!p) return
+  applyContent(p.blockId, p.before)
+  redoStack.value.push({ blockId: p.blockId, before: p.before, after: p.after })
+}
+
+function redo() {
+  const p = redoStack.value.pop()
+  lastPatch = null
+  if (!p) return
+  applyContent(p.blockId, p.after)
+  undoStack.value.push({ blockId: p.blockId, before: p.before, after: p.after })
+}
+
+// 键盘快捷键：仅在非输入焦点时接管（输入框内保留原生撤销）
+function onKeydown(e: KeyboardEvent) {
+  if (!e.ctrlKey) return
+  const tag = (e.target as HTMLElement)?.tagName
+  if (tag === 'INPUT' || tag === 'TEXTAREA') return
+  const key = e.key.toLowerCase()
+  if (key === 'z' && !e.shiftKey) { e.preventDefault(); undo() }
+  else if ((key === 'z' && e.shiftKey) || key === 'y') { e.preventDefault(); redo() }
+}
+
+function onBeforeUnload(e: BeforeUnloadEvent) {
+  if (pendingUpdates.size > 0) {
+    flushSaves()
+    e.preventDefault()
+    e.returnValue = ''
+  }
+}
+
+onMounted(() => {
+  window.addEventListener('keydown', onKeydown)
+  window.addEventListener('beforeunload', onBeforeUnload)
+})
+
+onUnmounted(() => {
+  window.removeEventListener('keydown', onKeydown)
+  window.removeEventListener('beforeunload', onBeforeUnload)
+  flushSaves()
+})
+
+// 切换文档（路由离开）前自动保存
+onBeforeRouteLeave(async () => {
+  await flushSaves()
+})
+
+async function updateBlockTitle(block: Block, title: string) {
+  block.title = title
+  pendingUpdates.set(block.id, { ...(pendingUpdates.get(block.id) || {}), title })
+  scheduleFlush()
+}
+
+function updateBlockContent(block: Block, content: string) {
+  recordContentChange(block.id, block.content, content)
+  applyContent(block.id, content)
 }
 
 // ── 拖拽排序（同级重排 + 父子层级调整 + 落点提示）──
@@ -191,6 +313,10 @@ async function onDrop(block: Block, e: DragEvent) {
     <header class="editor-header">
       <button @click="router.push('/')">← 返回</button>
       <h2>{{ doc.name }}</h2>
+      <span class="ce-spacer"></span>
+      <button class="icon-btn" title="撤销 (Ctrl+Z)" :disabled="undoStack.length === 0" @click="undo">↶ 撤销</button>
+      <button class="icon-btn" title="重做 (Ctrl+Y)" :disabled="redoStack.length === 0" @click="redo">↷ 重做</button>
+      <span v-if="saveStateText" class="save-status" :class="saveState">{{ saveStateText }}</span>
     </header>
 
     <div class="editor-body">
@@ -287,6 +413,13 @@ async function onDrop(block: Block, e: DragEvent) {
   border-bottom: 1px solid var(--border);
 }
 .editor-header h2 { font-size: 1.2rem; }
+.editor-header .ce-spacer { flex: 1; }
+.save-status { font-size: 0.8rem; color: var(--muted); }
+.save-status.saved { color: #4caf50; }
+.save-status.saving, .save-status.pending { color: var(--accent); }
+.save-status.error { color: var(--danger); }
+.icon-btn:disabled { opacity: 0.4; cursor: default; }
+.icon-btn:disabled:hover { background: transparent; color: var(--muted); }
 .editor-body { padding: 24px; max-width: 800px; margin: 0 auto; }
 .add-block-bar { display: flex; gap: 8px; margin-bottom: 20px; }
 .add-block-bar input { flex: 1; }

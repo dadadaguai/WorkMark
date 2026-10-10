@@ -70,8 +70,8 @@ function modeOf(i: number, def: 'edit' | 'view') {
 }
 
 function setMode(i: number, m: 'edit' | 'view') {
+  // 仅切换 UI 状态；mode 不持久化到 content，不触发 emit（避免无变更的幽灵保存）
   mode.value[i] = m
-  flush()
 }
 
 // ── 折叠/展开（预览态长内容）──
@@ -171,19 +171,23 @@ function lineNumbers(text: string): string {
       <template v-if="item.type === 'text'">
         <div v-if="modeOf(i, 'view') === 'view'" class="ce-preview-wrap">
           <div
+            v-if="item.content"
             class="ce-preview md-render"
             :class="{ collapsed: !expanded[i] }"
-            v-html="renderMarkdown(item.content || '')"
+            v-html="renderMarkdown(item.content)"
             @click="setMode(i, 'edit')"
           ></div>
+          <div v-else class="ce-placeholder" @click="setMode(i, 'edit')">（空，点击输入文本，支持 Markdown）</div>
           <button v-if="!expanded[i]" class="ce-expand" @click="expanded[i] = true">展开</button>
           <button v-else class="ce-expand" @click="expanded[i] = false">收起</button>
         </div>
         <textarea
           v-else
           v-model="item.content"
+          v-focus
           class="ce-input ce-textarea"
           placeholder="输入文本，支持 Markdown（# 标题、**粗体**、`代码`、- 列表）..."
+          @input="flush"
           @blur="flush(); setMode(i, 'view')"
         ></textarea>
       </template>
@@ -202,6 +206,7 @@ function lineNumbers(text: string): string {
           class="ce-input ce-textarea mono"
           :class="{ 'shell-input': item.type === 'shell' }"
           :placeholder="item.type === 'shell' ? '输入命令...' : item.type === 'output' ? '粘贴终端输出...' : '输入代码...'"
+          @input="flush"
           @blur="flush"
         ></textarea>
         <div v-else class="ce-preview-wrap">
@@ -296,7 +301,10 @@ function lineNumbers(text: string): string {
 .shell-input { background: #1a1b26; color: #9ece6a; }
 .ce-preview-wrap { position: relative; }
 .ce-preview { cursor: text; min-height: 24px; padding: 4px 2px; }
-.ce-preview:empty::before { content: '（空，点击输入）'; color: var(--muted); font-size: 0.85rem; }
+.ce-placeholder {
+  color: var(--muted); font-size: 0.85rem; cursor: text;
+  padding: 8px 4px; min-height: 24px;
+}
 .ce-preview.collapsed { max-height: 300px; overflow: hidden; }
 .md-render :deep(p) { margin: 4px 0; white-space: pre-wrap; word-break: break-word; }
 .md-render :deep(p.md-gap) { height: 0.5em; }

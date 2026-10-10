@@ -1,8 +1,20 @@
 """任务块 / 子块 CRUD 路由。"""
 
+import json
+
 from flask import Blueprint, request, jsonify, g
 
 bp = Blueprint("blocks", __name__)
+
+
+def normalize_content(content):
+    """规范化 content JSON 为紧凑格式，保证前后端字符串一致（避免格式差异触发幽灵保存）。"""
+    if content is None:
+        return None
+    try:
+        return json.dumps(json.loads(content), ensure_ascii=False, separators=(",", ":"))
+    except (ValueError, TypeError):
+        return content
 
 
 @bp.get("/document/<int:document_id>")
@@ -44,7 +56,8 @@ def create_block():
     cursor = g.db.execute(
         """INSERT INTO blocks (document_id, parent_id, title, content, sort_order, work_start_time, work_end_time)
            VALUES (?, ?, ?, ?, ?, ?, ?)""",
-        (document_id, parent_id, body.get("title"), body.get("content", "[]"),
+        (document_id, parent_id, body.get("title"),
+         normalize_content(body.get("content", "[]")) or "[]",
          max_order + 1, body.get("work_start_time"), body.get("work_end_time")),
     )
     g.db.commit()
@@ -67,6 +80,8 @@ def update_block(block_id):
         return jsonify({"error": "块不存在"}), 404
 
     body = request.get_json(force=True) or {}
+    if "content" in body:
+        body["content"] = normalize_content(body["content"])
     fields, values = [], []
     for f in ("title", "content", "parent_id", "sort_order", "work_start_time", "work_end_time"):
         v = body.get(f)
