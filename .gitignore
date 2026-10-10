@@ -14,6 +14,8 @@ env/
 # Node
 node_modules/
 frontend/dist/
+frontend/tsconfig.tsbuildinfo
+frontend/*.tsbuildinfo
 
 # Data (local runtime data, not version controlled)
 data/
