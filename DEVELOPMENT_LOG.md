@@ -33,6 +33,8 @@ cd frontend && npm run dev # 前端 http://localhost:5173
 |---|---|---|---|
 | 2026-10-10 | feature/backend-skeleton | Flask + SQLite 后端骨架：database.py (schema + FTS5)、main.py (Flask app + CORS)、routers/ (folders + documents + blocks CRUD)、run.py 入口 | ✅ 已合并 |
 | 2026-10-10 | feature/frontend-skeleton | Vue 3 + TypeScript + Vite + Pinia + Vue Router 前端骨架：HomeView (文件夹侧栏 + 文档列表 + 新建)、EditorView (任务块/子块 CRUD + 基础编辑)、useApi composable、类型定义 | ✅ 已合并 |
+| 2026-10-10 | feature/folder-doc-mgmt | FR-01：文件夹/文档重命名（双击+按钮）、移动对话框、删除确认对话框（含影响范围统计）、ConfirmDialog 组件、v-focus 指令、静态资源缓存策略 | ✅ 已合并 |
+| 2026-10-10 | feature/block-editing | FR-02：块完整复制（含子块）、POST /blocks/reorder 批量排序、HTML5 拖拽排序（同级+层级调整+落点提示）、内容块模板复用（localStorage） | ✅ 已合并 |
 
 ### 数据库 Schema
 
@@ -79,9 +81,9 @@ cd frontend && npm run dev # 前端 http://localhost:5173
 - [x] 多层嵌套
 - [x] 默认文件夹固定显示
 - [x] 默认文件夹不可删除/重命名（后端已实现）
-- [ ] 删除非空文件夹时显示影响范围确认对话框
-- [ ] 文件夹/文档移动功能（前端菜单）
-- [ ] 重命名 UI（前端）
+- [x] 删除非空文件夹时显示影响范围确认对话框
+- [x] 文件夹/文档移动功能（前端菜单）
+- [x] 重命名 UI（前端）
 
 ### FR-02: 任务块与子块编辑（P0）
 
@@ -89,11 +91,11 @@ cd frontend && npm run dev # 前端 http://localhost:5173
 - [x] 追加子块
 - [x] 编辑块标题
 - [x] 删除块（含确认）
-- [ ] 复制任务块
-- [ ] 完整复制（不复制父子关系）
-- [ ] 内容块模板复用
-- [ ] 拖拽排序（同级 + 父子层级调整）
-- [ ] 拖拽落点提示
+- [x] 复制任务块
+- [x] 完整复制（不复制父子关系）
+- [x] 内容块模板复用（localStorage 本地实现）
+- [x] 拖拽排序（同级 + 父子层级调整）
+- [x] 拖拽落点提示
 
 ### FR-03: 内容编辑器（P0）
 
