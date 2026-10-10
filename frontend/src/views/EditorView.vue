@@ -2,6 +2,7 @@
 import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { api } from '@/composables/useApi'
+import ContentEditor from '@/components/ContentEditor.vue'
 import type { Document, Block } from '@/types'
 
 const props = defineProps<{ id: string }>()
@@ -231,12 +232,10 @@ async function onDrop(block: Block, e: DragEvent) {
             <button class="icon-btn danger" title="删除" @click="deleteBlock(top.id)">删除</button>
           </div>
           <div class="block-content">
-            <textarea
-              :value="top.content"
-              @change="updateBlockContent(top, ($event.target as HTMLTextAreaElement).value)"
-              placeholder="输入内容..."
-              class="content-area"
-            ></textarea>
+            <ContentEditor
+              :model-value="top.content"
+              @update:model-value="updateBlockContent(top, $event)"
+            />
           </div>
           <div class="block-actions">
             <button @click="addSubBlock(top.id)">+ 添加子块</button>
@@ -267,12 +266,10 @@ async function onDrop(block: Block, e: DragEvent) {
             <button class="icon-btn danger" title="删除" @click="deleteBlock(child.id)">删除</button>
           </div>
           <div class="block-content">
-            <textarea
-              :value="child.content"
-              @change="updateBlockContent(child, ($event.target as HTMLTextAreaElement).value)"
-              placeholder="输入内容..."
-              class="content-area"
-            ></textarea>
+            <ContentEditor
+              :model-value="child.content"
+              @update:model-value="updateBlockContent(child, $event)"
+            />
           </div>
         </div>
       </template>
