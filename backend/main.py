@@ -57,15 +57,21 @@ def health():
 
 # 前端静态文件（生产模式：构建产物由 Flask 直接提供）
 if FRONTEND_DIST.exists():
-    from flask import send_from_directory
+    from flask import send_from_directory, make_response
 
     @app.route("/", defaults={"path": ""})
     @app.route("/<path:path>")
     def serve_frontend(path):
         full = FRONTEND_DIST / path
         if path and full.is_file():
-            return send_from_directory(str(FRONTEND_DIST), path)
-        return send_from_directory(str(FRONTEND_DIST), "index.html")
+            resp = make_response(send_from_directory(str(FRONTEND_DIST), path))
+            # 带 hash 的静态资源可长期缓存
+            resp.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+            return resp
+        # index.html 不缓存，确保浏览器始终加载最新版本
+        resp = make_response(send_from_directory(str(FRONTEND_DIST), "index.html"))
+        resp.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+        return resp
 
 
 # 启动时初始化数据库
