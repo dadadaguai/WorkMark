@@ -39,6 +39,7 @@ cd frontend && npm run dev # 前端 http://localhost:5173
 | 2026-10-10 | feature/auto-save | FR-06：防抖自动保存（输入即生效，停止 800ms 保存）、保存状态指示、基于内容补丁的撤销/重做（连续输入合并 + Ctrl+Z/Ctrl+Y）、路由切换/关闭页面自动保存、空文本块占位符、textarea 自动聚焦、后端 content JSON 规范化 | ✅ 已合并 |
 | 2026-10-10 | feature/time-sorting | FR-04：时间轴排序切换（文档顺序/创建时间/工作开始时间）、按工作时段分组浏览、平铺/折叠视图切换、卡片类型化摘要+按需展开、工作开始/结束时间编辑（datetime-local）、后端时间字段允许显式清空 | ✅ 已合并 |
 | 2026-10-10 | feature/search-context | FR-05：全文搜索 API（LIKE 多关键词 AND，文档名+块标题+内容）、搜索 UI（关键词高亮 mark、文档/块命中分组）、日期浏览（创建/工作开始日期，可与关键词组合）、块命中跳转定位高亮、编辑器停留位置记录（last_position）、首页"继续上次工作"入口 | ✅ 已合并 |
+| 2026-10-10 | feature/attachments | FR-07：附件 API（multipart 上传托管存储 / 引用原始路径）、附件管理页（搜索/类型/大小/引用计数/所属记录跳转/失效警告）、删除引用检查（被引用 409 拒绝）、图片内容块迁移至附件系统（attachment_id 引用，兼容旧 dataURL） | ✅ 已合并 |
 
 ### 数据库 Schema
 
@@ -71,11 +72,16 @@ cd frontend && npm run dev # 前端 http://localhost:5173
 - [x] POST /api/blocks/:id/copy — 完整复制块（顶层块含子块）
 - [x] GET /api/search?q=&date= — 全文搜索（多关键词 AND + 日期过滤，可组合）
 - [x] GET /api/search/last-work — 最近工作上下文（"继续上次工作"）
+- [x] POST /api/attachments — 上传附件（multipart；file=托管复制到 data/attachments/，或 original_path+is_reference=1=引用原始路径；可选 block_id 建立块关联）
+- [x] GET /api/attachments — 附件列表（q 按文件名搜索；含引用计数 ref_count、引用路径有效性 path_exists、所属记录 used_by）
+- [x] GET /api/attachments/:id/file — 获取附件文件内容（send_file；引用失效返回 410）
+- [x] DELETE /api/attachments/:id — 删除附件（被引用返回 409 拒绝；仅托管文件物理删除）
 
 ### 前端页面
 
 - [x] 首页 HomeView：文件夹侧栏、文档列表、新建文档/文件夹
 - [x] 编辑器 EditorView：任务块/子块 CRUD、基础内容编辑、返回首页
+- [x] 附件管理 AttachmentsView：搜索、托管/引用列表、引用计数与所属记录跳转、页面上传/添加引用、删除保护
 
 ## 开发中
 
@@ -110,7 +116,7 @@ cd frontend && npm run dev # 前端 http://localhost:5173
 - [x] 编辑⇄预览双态 + Markdown 兼容（极简渲染器，非实时 WYSIWYG）
 - [x] 代码块（等宽字体、语法高亮、行号、折叠、一键复制）
 - [x] Shell 命令 / 终端输出专用样式
-- [x] 图片插入与预览放大（dataURL ≤2MB，后续迁移附件系统）
+- [x] 图片插入与预览放大（已迁移附件系统：attachment_id 引用，兼容旧 dataURL）
 - [x] 待办清单
 - [x] 表格
 - [x] 原文保真：粘贴保留换行缩进、复制不含行号
@@ -147,12 +153,12 @@ cd frontend && npm run dev # 前端 http://localhost:5173
 
 ### FR-07: 附件管理（P0）
 
-- [ ] 附件上传 API（复制到本地目录）
-- [ ] 引用原始路径选项
-- [ ] 附件管理页面
-- [ ] 附件搜索
-- [ ] 删除时引用检查
-- [ ] 图片插入内容块
+- [x] 附件上传 API（复制到 data/attachments/，文件名加 uuid 前缀防冲突）
+- [x] 引用原始路径选项（is_reference=1，不复制文件，列表显示失效警告）
+- [x] 附件管理页面（/attachments，首页入口）
+- [x] 附件搜索（按文件名 LIKE）
+- [x] 删除时引用检查（block_attachments 引用计数 >0 返回 409，前端 alert 后端错误信息）
+- [x] 图片插入内容块（ContentEditor 图片块上传后引用 attachment_id；兼容旧 dataURL；带 block_id 自动建立块关联）
 
 ### FR-08: 删除规则与级联（P0）
 

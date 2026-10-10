@@ -271,6 +271,7 @@ function continueLastWork() {
   <div class="home">
     <header class="home-header">
       <h1>WorkMark</h1>
+      <button class="att-entry" @click="router.push('/attachments')">附件管理</button>
       <button v-if="lastDoc" class="last-work-btn" @click="continueLastWork" title="恢复上次停留位置">
         ▸ 继续上次工作：{{ lastDoc.name }}
       </button>
@@ -565,6 +566,15 @@ function continueLastWork() {
 
 /* 搜索栏与结果（FR-05） */
 .home-header h1 { margin-right: auto; }
+.att-entry {
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--fg);
+  padding: 6px 14px;
+  border-radius: var(--radius);
+  font-size: 0.88rem;
+}
+.att-entry:hover { background: var(--accent-light); color: var(--accent); border-color: var(--accent); }
 .last-work-btn {
   border: 1px solid var(--accent);
   background: var(--accent-light);

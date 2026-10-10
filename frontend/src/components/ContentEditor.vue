@@ -5,9 +5,10 @@
 import { ref, watch } from 'vue'
 import { renderMarkdown } from '@/utils/markdown'
 import { highlight } from '@/utils/highlight'
+import { api } from '@/composables/useApi'
 import type { ContentBlock } from '@/types'
 
-const props = defineProps<{ modelValue: string }>()
+const props = defineProps<{ modelValue: string; blockId?: number }>()
 const emit = defineEmits<{ 'update:modelValue': [string] }>()
 
 const items = ref<ContentBlock[]>(parse(props.modelValue))
@@ -122,22 +123,34 @@ function removeRow(item: ContentBlock, ri: number) {
   flush()
 }
 
-// ── 图片（dataURL，≤2MB；后续迁移到附件系统）──
+// ── 图片（附件系统：上传后引用 attachment_id；旧 dataURL 内容保持兼容）──
 const zoomSrc = ref<string | null>(null)
+const imageUploading = ref(false)
 
-function onImagePick(item: ContentBlock, e: Event) {
+function imageUrl(item: ContentBlock): string | null {
+  if (item.attachment_id) return `/api/attachments/${item.attachment_id}/file`
+  return item.content || null
+}
+
+async function onImagePick(item: ContentBlock, e: Event) {
   const f = (e.target as HTMLInputElement).files?.[0]
+  ;(e.target as HTMLInputElement).value = ''
   if (!f) return
-  if (f.size > 2 * 1024 * 1024) {
-    alert('图片不能超过 2MB')
-    return
-  }
-  const reader = new FileReader()
-  reader.onload = () => {
-    item.content = reader.result as string
+  if (imageUploading.value) return
+  imageUploading.value = true
+  try {
+    const form = new FormData()
+    form.append('file', f)
+    if (props.blockId !== undefined) form.append('block_id', String(props.blockId))
+    const att = await api.upload<{ id: number }>('/attachments', form)
+    item.attachment_id = att.id
+    item.content = ''
     flush()
+  } catch (err) {
+    alert(`图片上传失败：${err instanceof Error ? err.message : err}`)
+  } finally {
+    imageUploading.value = false
   }
-  reader.readAsDataURL(f)
 }
 
 // ── 行号列 ──
@@ -249,12 +262,16 @@ function lineNumbers(text: string): string {
 
       <!-- 图片 -->
       <template v-else-if="item.type === 'image'">
-        <img v-if="item.content" :src="item.content" class="ce-image" @click="zoomSrc = item.content" title="点击放大" />
+        <template v-if="imageUrl(item)">
+          <img :src="imageUrl(item)!" class="ce-image" @click="zoomSrc = imageUrl(item)" title="点击放大" />
+          <div class="ce-mode-bar">
+            <span v-if="imageUploading">上传中…</span>
+            <input type="file" accept="image/*" :disabled="imageUploading" @change="onImagePick(item, $event)" />
+          </div>
+        </template>
         <div v-else class="ce-image-empty">
-          <input type="file" accept="image/*" @change="onImagePick(item, $event)" />
-        </div>
-        <div v-if="item.content" class="ce-mode-bar">
-          <input type="file" accept="image/*" @change="onImagePick(item, $event)" />
+          <span v-if="imageUploading">上传中…</span>
+          <input v-else type="file" accept="image/*" @change="onImagePick(item, $event)" />
         </div>
       </template>
     </div>

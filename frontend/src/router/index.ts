@@ -13,6 +13,11 @@ const routes: RouteRecordRaw[] = [
     component: () => import('@/views/EditorView.vue'),
     props: true,
   },
+  {
+    path: '/attachments',
+    name: 'attachments',
+    component: () => import('@/views/AttachmentsView.vue'),
+  },
 ]
 
 export default createRouter({

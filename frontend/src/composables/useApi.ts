@@ -23,4 +23,13 @@ export const api = {
   post: <T>(path: string, body?: unknown) => request<T>('POST', path, body),
   put: <T>(path: string, body?: unknown) => request<T>('PUT', path, body),
   del: <T>(path: string) => request<T>('DELETE', path),
+  /** multipart/form-data 上传（不设置 Content-Type，由浏览器生成 boundary） */
+  upload: async <T>(path: string, form: FormData): Promise<T> => {
+    const res = await fetch(`${BASE}${path}`, { method: 'POST', body: form })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ error: res.statusText }))
+      throw new Error(err.error || `HTTP ${res.status}`)
+    }
+    return res.json()
+  },
 }

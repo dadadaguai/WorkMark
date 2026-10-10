@@ -543,6 +543,7 @@ async function onDrop(block: Block, e: DragEvent) {
             <div v-if="isExpanded(top.id)" class="block-content">
               <ContentEditor
                 :model-value="top.content"
+                :block-id="top.id"
                 @update:model-value="updateBlockContent(top, $event)"
               />
             </div>
@@ -598,6 +599,7 @@ async function onDrop(block: Block, e: DragEvent) {
             <div v-if="isExpanded(child.id)" class="block-content">
               <ContentEditor
                 :model-value="child.content"
+                :block-id="child.id"
                 @update:model-value="updateBlockContent(child, $event)"
               />
             </div>
