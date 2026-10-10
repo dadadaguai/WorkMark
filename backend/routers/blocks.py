@@ -83,6 +83,82 @@ def update_block(block_id):
     return jsonify(dict(row))
 
 
+@bp.post("/reorder")
+def reorder_blocks():
+    """批量更新块的父级与排序（拖拽排序用）。
+
+    body: { "updates": [{ "id": 1, "parent_id": null, "sort_order": 0 }, ...] }
+    """
+    body = request.get_json(force=True) or {}
+    updates = body.get("updates") or []
+    if not updates:
+        return jsonify({"error": "updates 不能为空"}), 400
+
+    for u in updates:
+        row = g.db.execute("SELECT id, document_id FROM blocks WHERE id = ?", (u["id"],)).fetchone()
+        if row is None:
+            return jsonify({"error": f"块 {u['id']} 不存在"}), 404
+        pid = u.get("parent_id")
+        if pid is not None:
+            parent = g.db.execute(
+                "SELECT document_id, parent_id FROM blocks WHERE id = ?", (pid,)
+            ).fetchone()
+            if parent is None or parent["parent_id"] is not None:
+                return jsonify({"error": f"父块 {pid} 无效（必须是顶层块）"}), 400
+            if parent["document_id"] != row["document_id"]:
+                return jsonify({"error": "父子块不属于同一文档"}), 400
+
+    for u in updates:
+        g.db.execute(
+            "UPDATE blocks SET parent_id = ?, sort_order = ?, updated_at = datetime('now', 'localtime') WHERE id = ?",
+            (u.get("parent_id"), u.get("sort_order", 0), u["id"]),
+        )
+    g.db.commit()
+    return jsonify({"updated": len(updates)})
+
+
+@bp.post("/<int:block_id>/copy")
+def copy_block(block_id):
+    """完整复制块（顶层块连同其子块一起复制，副本独立、不保留与原块的父子关联）。"""
+    row = g.db.execute("SELECT * FROM blocks WHERE id = ?", (block_id,)).fetchone()
+    if row is None:
+        return jsonify({"error": "块不存在"}), 404
+
+    def insert_copy(src, parent_id, sort_order):
+        cursor = g.db.execute(
+            """INSERT INTO blocks (document_id, parent_id, title, content, sort_order, work_start_time, work_end_time)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (src["document_id"], parent_id, src["title"], src["content"], sort_order,
+             src["work_start_time"], src["work_end_time"]),
+        )
+        return cursor.lastrowid
+
+    if row["parent_id"] is None:
+        # 顶层块：原块之后插入，同级后续块 sort_order 顺延
+        siblings = g.db.execute(
+            "SELECT id FROM blocks WHERE document_id = ? AND parent_id IS NULL AND sort_order > ? ORDER BY sort_order",
+            (row["document_id"], row["sort_order"]),
+        ).fetchall()
+        for s in siblings:
+            g.db.execute("UPDATE blocks SET sort_order = sort_order + 1 WHERE id = ?", (s["id"],))
+        new_id = insert_copy(row, None, row["sort_order"] + 1)
+        children = g.db.execute(
+            "SELECT * FROM blocks WHERE parent_id = ? ORDER BY sort_order, id", (block_id,)
+        ).fetchall()
+        for i, c in enumerate(children):
+            insert_copy(c, new_id, i)
+    else:
+        # 子块：复制到同一父块末尾
+        max_order = g.db.execute(
+            "SELECT COALESCE(MAX(sort_order), -1) FROM blocks WHERE parent_id = ?", (row["parent_id"],)
+        ).fetchone()[0]
+        new_id = insert_copy(row, row["parent_id"], max_order + 1)
+
+    g.db.commit()
+    new_row = g.db.execute("SELECT * FROM blocks WHERE id = ?", (new_id,)).fetchone()
+    return jsonify(dict(new_row)), 201
+
+
 @bp.delete("/<int:block_id>")
 def delete_block(block_id):
     row = g.db.execute("SELECT * FROM blocks WHERE id = ?", (block_id,)).fetchone()
