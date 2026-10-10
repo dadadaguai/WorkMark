@@ -35,6 +35,7 @@ cd frontend && npm run dev # 前端 http://localhost:5173
 | 2026-10-10 | feature/frontend-skeleton | Vue 3 + TypeScript + Vite + Pinia + Vue Router 前端骨架：HomeView (文件夹侧栏 + 文档列表 + 新建)、EditorView (任务块/子块 CRUD + 基础编辑)、useApi composable、类型定义 | ✅ 已合并 |
 | 2026-10-10 | feature/folder-doc-mgmt | FR-01：文件夹/文档重命名（双击+按钮）、移动对话框、删除确认对话框（含影响范围统计）、ConfirmDialog 组件、v-focus 指令、静态资源缓存策略 | ✅ 已合并 |
 | 2026-10-10 | feature/block-editing | FR-02：块完整复制（含子块）、POST /blocks/reorder 批量排序、HTML5 拖拽排序（同级+层级调整+落点提示）、内容块模板复用（localStorage） | ✅ 已合并 |
+| 2026-10-10 | feature/content-editor | FR-03：ContentEditor 组件七类内容块（文本/代码/命令/输出/待办/表格/图片）、极简 Markdown 渲染、极简语法高亮（行号/折叠/复制）、终端专用样式、长内容折叠 | ✅ 已合并 |
 
 ### 数据库 Schema
 
@@ -99,15 +100,14 @@ cd frontend && npm run dev # 前端 http://localhost:5173
 
 ### FR-03: 内容编辑器（P0）
 
-- [x] 基础文本编辑（textarea，临时方案）
-- [ ] 所见即所得编辑 + Markdown 兼容
-- [ ] 代码块（等宽字体、语法高亮、行号、折叠、一键复制）
-- [ ] Shell 命令 / 终端输出专用样式
-- [ ] 图片插入与预览放大
-- [ ] 待办清单
-- [ ] 表格
-- [ ] 原文保真：粘贴保留换行缩进、复制不含行号
-- [ ] 长内容折叠/展开
+- [x] 编辑⇄预览双态 + Markdown 兼容（极简渲染器，非实时 WYSIWYG）
+- [x] 代码块（等宽字体、语法高亮、行号、折叠、一键复制）
+- [x] Shell 命令 / 终端输出专用样式
+- [x] 图片插入与预览放大（dataURL ≤2MB，后续迁移附件系统）
+- [x] 待办清单
+- [x] 表格
+- [x] 原文保真：粘贴保留换行缩进、复制不含行号
+- [x] 长内容折叠/展开
 
 ### FR-04: 时间与排序（P0）
 
