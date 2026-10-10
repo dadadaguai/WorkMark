@@ -36,6 +36,7 @@ cd frontend && npm run dev # 前端 http://localhost:5173
 | 2026-10-10 | feature/folder-doc-mgmt | FR-01：文件夹/文档重命名（双击+按钮）、移动对话框、删除确认对话框（含影响范围统计）、ConfirmDialog 组件、v-focus 指令、静态资源缓存策略 | ✅ 已合并 |
 | 2026-10-10 | feature/block-editing | FR-02：块完整复制（含子块）、POST /blocks/reorder 批量排序、HTML5 拖拽排序（同级+层级调整+落点提示）、内容块模板复用（localStorage） | ✅ 已合并 |
 | 2026-10-10 | feature/content-editor | FR-03：ContentEditor 组件七类内容块（文本/代码/命令/输出/待办/表格/图片）、极简 Markdown 渲染、极简语法高亮（行号/折叠/复制）、终端专用样式、长内容折叠 | ✅ 已合并 |
+| 2026-10-10 | feature/auto-save | FR-06：防抖自动保存（输入即生效，停止 800ms 保存）、保存状态指示、基于内容补丁的撤销/重做（连续输入合并 + Ctrl+Z/Ctrl+Y）、路由切换/关闭页面自动保存、空文本块占位符、textarea 自动聚焦、后端 content JSON 规范化 | ✅ 已合并 |
 
 ### 数据库 Schema
 
@@ -64,6 +65,8 @@ cd frontend && npm run dev # 前端 http://localhost:5173
 - [x] GET /api/blocks/:id — 获取块
 - [x] PUT /api/blocks/:id — 更新块
 - [x] DELETE /api/blocks/:id — 删除块（含子块计数）
+- [x] POST /api/blocks/reorder — 批量更新块父级与排序（拖拽排序）
+- [x] POST /api/blocks/:id/copy — 完整复制块（顶层块含子块）
 
 ### 前端页面
 
@@ -132,11 +135,11 @@ cd frontend && npm run dev # 前端 http://localhost:5173
 ### FR-06: 保存、撤销与重做（P0）
 
 - [x] 手动保存（更新内容触发 PUT）
-- [ ] 自动保存（停止输入后防抖保存）
-- [ ] 保存状态提示（保存中 / 已保存 / 保存失败）
-- [ ] 撤销 / 重做
-- [ ] 切换文档时自动保存
-- [ ] 关闭页面时触发保存
+- [x] 自动保存（输入即生效，停止输入 800ms 后防抖保存）
+- [x] 保存状态提示（有未保存更改 / 保存中… / 已保存 ✓ / 保存失败）
+- [x] 撤销 / 重做（内容补丁栈，同块 1 秒内连续输入合并为一步；Ctrl+Z / Ctrl+Shift+Z / Ctrl+Y，输入框内保留原生撤销）
+- [x] 切换文档时自动保存（onBeforeRouteLeave flush）
+- [x] 关闭页面时触发保存（beforeunload）
 
 ### FR-07: 附件管理（P0）
 
@@ -178,10 +181,22 @@ cd frontend && npm run dev # 前端 http://localhost:5173
 ## Git 提交历史
 
 ```
+* docs: 更新开发日志（FR-06 完成状态）
+* merge: FR-06 自动保存 + 撤销/重做
+| * feat(fr-06): 防抖自动保存/保存状态/撤销重做/内容JSON规范化
+* docs: 更新开发日志（FR-03 完成状态）
+* merge: FR-03 内容编辑器（多类型内容块）
+* feat(fr-03): 内容编辑器 — 多类型内容块
+* docs: 更新开发日志（FR-01/FR-02 完成状态）
+* merge: FR-02 任务块复制/拖拽排序/模板复用
+* feat(fr-02): 任务块复制/拖拽排序/内容块模板复用
+* merge: FR-01 文件夹与文档管理（重命名/移动/删除确认）
+* feat(fr-01): 文件夹与文档管理 — 重命名/移动/删除确认
+* docs: 创建开发进度跟踪文档
 * merge: frontend skeleton (Vue 3 + TypeScript + Vite)
-| * feat(frontend): Vue 3 + TypeScript + Vite 前端骨架
+* feat(frontend): Vue 3 + TypeScript + Vite 前端骨架
 * merge: backend skeleton (Flask + SQLite)
-| * feat(backend): Flask + SQLite 后端骨架
+* feat(backend): Flask + SQLite 后端骨架
 * chore: init git repo with .gitignore
 ```
 
@@ -190,3 +205,5 @@ cd frontend && npm run dev # 前端 http://localhost:5173
 - 因系统 asyncio (_overlapped) 损坏，后端从 FastAPI 切换为 Flask
 - Python socket 模块受 WinSock 损坏影响，无法从 Python 发起 HTTP 请求（浏览器不受影响）
 - 开发时 npm 需禁用代理：`npm config set proxy null; npm config set https-proxy null`
+- 测试浏览器（CDP 自动化）限制：无法向 textarea 插入文本、blur/change 事件不触发、组合键不可用。E2E 测试用「设置 value + 派发 input 事件」模拟键入（与真实键盘在 v-model 层面等价），焦点/失焦用真实点击
+- 内容块文本输入采用 @input 即时 emit（非 blur），保证失焦前关闭页面不丢内容
