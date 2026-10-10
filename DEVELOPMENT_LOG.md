@@ -38,6 +38,7 @@ cd frontend && npm run dev # 前端 http://localhost:5173
 | 2026-10-10 | feature/content-editor | FR-03：ContentEditor 组件七类内容块（文本/代码/命令/输出/待办/表格/图片）、极简 Markdown 渲染、极简语法高亮（行号/折叠/复制）、终端专用样式、长内容折叠 | ✅ 已合并 |
 | 2026-10-10 | feature/auto-save | FR-06：防抖自动保存（输入即生效，停止 800ms 保存）、保存状态指示、基于内容补丁的撤销/重做（连续输入合并 + Ctrl+Z/Ctrl+Y）、路由切换/关闭页面自动保存、空文本块占位符、textarea 自动聚焦、后端 content JSON 规范化 | ✅ 已合并 |
 | 2026-10-10 | feature/time-sorting | FR-04：时间轴排序切换（文档顺序/创建时间/工作开始时间）、按工作时段分组浏览、平铺/折叠视图切换、卡片类型化摘要+按需展开、工作开始/结束时间编辑（datetime-local）、后端时间字段允许显式清空 | ✅ 已合并 |
+| 2026-10-10 | feature/search-context | FR-05：全文搜索 API（LIKE 多关键词 AND，文档名+块标题+内容）、搜索 UI（关键词高亮 mark、文档/块命中分组）、日期浏览（创建/工作开始日期，可与关键词组合）、块命中跳转定位高亮、编辑器停留位置记录（last_position）、首页"继续上次工作"入口 | ✅ 已合并 |
 
 ### 数据库 Schema
 
@@ -68,6 +69,8 @@ cd frontend && npm run dev # 前端 http://localhost:5173
 - [x] DELETE /api/blocks/:id — 删除块（含子块计数）
 - [x] POST /api/blocks/reorder — 批量更新块父级与排序（拖拽排序）
 - [x] POST /api/blocks/:id/copy — 完整复制块（顶层块含子块）
+- [x] GET /api/search?q=&date= — 全文搜索（多关键词 AND + 日期过滤，可组合）
+- [x] GET /api/search/last-work — 最近工作上下文（"继续上次工作"）
 
 ### 前端页面
 
@@ -126,12 +129,12 @@ cd frontend && npm run dev # 前端 http://localhost:5173
 ### FR-05: 搜索与上下文恢复（P0）
 
 - [x] FTS5 数据库层已就绪
-- [ ] 搜索 API 端点
-- [ ] 搜索 UI + 结果定位到块
-- [ ] 日期浏览
-- [ ] 搜索 + 时间轴 + 筛选器联动
-- [ ] "继续上次工作"入口
-- [ ] 自动恢复上次停留位置（last_position 字段已建）
+- [x] 搜索 API 端点（LIKE 子串匹配，FTS5 trigram 因 3 字符下限不适合中文短词而弃用）
+- [x] 搜索 UI + 结果定位到块（摘要命中片段 mark 高亮，点击跳转 ?block= 滚动定位+闪烁）
+- [x] 日期浏览（date 输入，按创建/工作开始日期过滤）
+- [x] 搜索 + 日期组合筛选（关键词与日期 AND 组合）
+- [x] "继续上次工作"入口（最近更新文档 + last_position）
+- [x] 自动恢复上次停留位置（路由离开时记录最后编辑块，进入文档时恢复定位）
 
 ### FR-06: 保存、撤销与重做（P0）
 
@@ -182,6 +185,9 @@ cd frontend && npm run dev # 前端 http://localhost:5173
 ## Git 提交历史
 
 ```
+* docs: 更新开发日志（FR-05 完成状态）
+* merge: FR-05 搜索与上下文恢复
+| * feat(fr-05): 全文搜索/日期浏览/结果定位/继续上次工作
 * docs: 更新开发日志（FR-04 完成状态）
 * merge: FR-04 时间与排序（时间轴/分组/折叠/工作时间）
 | * feat(fr-04): 时间轴排序/工作时段分组/折叠视图/工作时间编辑
@@ -210,4 +216,7 @@ cd frontend && npm run dev # 前端 http://localhost:5173
 - Python socket 模块受 WinSock 损坏影响，无法从 Python 发起 HTTP 请求（浏览器不受影响）
 - 开发时 npm 需禁用代理：`npm config set proxy null; npm config set https-proxy null`
 - 测试浏览器（CDP 自动化）限制：无法向 textarea 插入文本、blur/change 事件不触发、组合键不可用。E2E 测试用「设置 value + 派发 input 事件」模拟键入（与真实键盘在 v-model 层面等价），焦点/失焦用真实点击
+- 浏览器 evaluate 异步限制：evaluate 工具不等待 Promise（async IIFE 返回 undefined）。需异步验证时，脚本内把结果写入 window 变量（如 window.__r），用第二次 evaluate 读取；按钮点击与轮询断言必须在同一次 evaluate 内完成，否则工具调度延迟会错过 2 秒级瞬态 UI（如高亮动画）
+- browser_navigate 是整页刷新，不触发 Vue Router 的 onBeforeRouteLeave；测试路由离开钩子（如 last_position 保存）必须用页面内真实点击导航
 - 内容块文本输入采用 @input 即时 emit（非 blur），保证失焦前关闭页面不丢内容
+- last_position 仅在 SPA 路由离开（onBeforeRouteLeave）时写入；整页刷新/关闭场景内容已由防抖保存，仅停留位置不更新（可接受的取舍）
