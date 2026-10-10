@@ -84,8 +84,11 @@ def update_block(block_id):
         body["content"] = normalize_content(body["content"])
     fields, values = [], []
     for f in ("title", "content", "parent_id", "sort_order", "work_start_time", "work_end_time"):
-        v = body.get(f)
-        if v is not None:
+        if f not in body:
+            continue
+        v = body[f]
+        # 时间字段允许显式传 null 清空；其余字段忽略 null
+        if f in ("work_start_time", "work_end_time") or v is not None:
             fields.append(f"{f} = ?")
             values.append(v)
     if fields:
