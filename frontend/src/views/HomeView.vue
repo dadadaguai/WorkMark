@@ -502,7 +502,8 @@ function continueLastWork() {
 }
 .home-body { display: flex; flex: 1; min-height: 0; }
 .sidebar {
-  width: 248px;
+  width: 260px;
+  flex-shrink: 0;
   padding: 20px 14px;
   border-right: 1px solid var(--border);
   background: var(--bg-alt);

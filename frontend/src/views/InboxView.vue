@@ -176,7 +176,7 @@ function goDocument(docId: number | null, blockId?: number) {
 </template>
 
 <style scoped>
-.inbox-page { max-width: 860px; margin: 0 auto; padding: 20px 28px 48px; }
+.inbox-page { max-width: min(1180px, 92vw); margin: 0 auto; padding: 20px 32px 48px; }
 .inbox-header { display: flex; align-items: center; gap: 12px; margin-bottom: 20px; }
 .inbox-header h2 { font-family: var(--font-serif); font-size: 1.3rem; letter-spacing: 0.03em; }
 
