@@ -201,6 +201,9 @@ cd frontend && npm run dev # 前端 http://localhost:5173
 ## Git 提交历史
 
 ```
+* docs: 更新开发日志（FR-09 完成状态，MVP P0 全部完成）
+* merge: FR-09 快速记录/收件箱
+| * feat(fr-09): 快速记录/收件箱 — 快速输入与整理流转
 * docs: 更新开发日志（FR-08 完成状态）
 * merge: FR-08 删除规则收尾（块删除确认/影响范围/子块保留）
 | * feat(fr-08): 块删除确认对话框与子块保留选项
