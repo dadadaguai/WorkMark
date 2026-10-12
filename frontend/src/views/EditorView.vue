@@ -3,6 +3,7 @@ import { ref, computed, watch, nextTick, onMounted, onUnmounted } from 'vue'
 import { useRouter, useRoute, onBeforeRouteLeave } from 'vue-router'
 import { api } from '@/composables/useApi'
 import ContentEditor from '@/components/ContentEditor.vue'
+import ConfirmDialog from '@/components/ConfirmDialog.vue'
 import type { Document, Block, ContentBlock } from '@/types'
 
 const props = defineProps<{ id: string }>()
@@ -204,9 +205,38 @@ async function addSubBlock(parentId: number) {
   blocks.value.push(block)
 }
 
+// ── 删除确认对话框（FR-08：影响范围 + 子块保留选项）──
+const deleteTarget = ref<{ block: Block; direct: number; descendants: number } | null>(null)
+const keepChildren = ref(false)
+
+const deleteDetails = computed(() => {
+  if (!deleteTarget.value) return []
+  const t = deleteTarget.value
+  if (t.direct === 0) return []
+  return [
+    { label: '直接子块', value: `${t.direct} 个` },
+    { label: '后代子块（含孙级）', value: `${t.descendants} 个` },
+  ]
+})
+
 async function deleteBlock(blockId: number) {
-  if (!confirm('确认删除此块？包含子块时将一并删除。')) return
-  await api.del(`/blocks/${blockId}`)
+  const block = blocks.value.find(b => b.id === blockId)
+  if (!block) return
+  const direct = childrenOf(blockId).length
+  let descendants = 0
+  const walk = (pid: number) => {
+    for (const c of childrenOf(pid)) { descendants++; walk(c.id) }
+  }
+  walk(blockId)
+  deleteTarget.value = { block, direct, descendants }
+  keepChildren.value = false
+}
+
+async function confirmDeleteBlock() {
+  if (!deleteTarget.value) return
+  const { block } = deleteTarget.value
+  deleteTarget.value = null
+  await api.del(`/blocks/${block.id}${keepChildren.value ? '?keep_children=1' : ''}`)
   await reloadBlocks()
 }
 
@@ -610,6 +640,23 @@ async function onDrop(block: Block, e: DragEvent) {
         </template>
       </template>
     </div>
+
+    <!-- 删除块确认对话框（FR-08：影响范围展示 + 子块是否一并删除） -->
+    <ConfirmDialog
+      v-if="deleteTarget"
+      :title="`确认删除任务块「${deleteTarget.block.title || '无标题'}」？`"
+      :message="deleteTarget.direct > 0 ? '默认删除时子块将一并删除，且不可恢复。' : '删除后不可恢复。'"
+      :details="deleteDetails"
+      confirmText="删除"
+      :danger="true"
+      @confirm="confirmDeleteBlock"
+      @cancel="deleteTarget = null"
+    >
+      <label v-if="deleteTarget.direct > 0" class="keep-children-option">
+        <input type="checkbox" v-model="keepChildren" />
+        保留子块（提升为{{ deleteTarget.block.parent_id ? '上一级' : '独立' }}任务块）
+      </label>
+    </ConfirmDialog>
   </div>
   <div v-else class="loading">加载中...</div>
 </template>
@@ -742,5 +789,18 @@ async function onDrop(block: Block, e: DragEvent) {
 @keyframes block-flash {
   0%, 50% { outline: 2px solid var(--accent); outline-offset: 2px; background: var(--accent-light); }
   100% { outline: none; background: var(--bg); }
+}
+
+/* 删除确认对话框：子块保留选项 */
+.keep-children-option {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.88rem;
+  color: var(--fg);
+  cursor: pointer;
+  padding: 8px 12px;
+  background: var(--bg-alt);
+  border-radius: var(--radius);
 }
 </style>

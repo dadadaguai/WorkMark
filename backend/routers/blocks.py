@@ -179,6 +179,12 @@ def copy_block(block_id):
 
 @bp.delete("/<int:block_id>")
 def delete_block(block_id):
+    """删除块。
+
+    查询参数 keep_children=1 时保留直接子块：子块提升到被删块原位置
+    （parent_id 改为被删块的父级，sort_order 依次排在原位置之后），后代随之跟随。
+    默认级联删除全部后代（SQLite ON DELETE CASCADE）。
+    """
     row = g.db.execute("SELECT * FROM blocks WHERE id = ?", (block_id,)).fetchone()
     if row is None:
         return jsonify({"error": "块不存在"}), 404
@@ -186,6 +192,28 @@ def delete_block(block_id):
     child_count = g.db.execute(
         "SELECT COUNT(*) FROM blocks WHERE parent_id = ?", (block_id,)
     ).fetchone()[0]
+
+    keep_children = request.args.get("keep_children") == "1"
+    if keep_children and child_count > 0:
+        parent_id = row["parent_id"]
+        pos = row["sort_order"]
+        kids = g.db.execute(
+            "SELECT id FROM blocks WHERE parent_id = ? ORDER BY sort_order, id", (block_id,)
+        ).fetchall()
+        n = len(kids)
+        # 同父级中位于被删块之后的兄弟块整体后移，腾出插入空间
+        g.db.execute(
+            "UPDATE blocks SET sort_order = sort_order + ? WHERE parent_id IS ? AND sort_order > ?",
+            (n, parent_id, pos),
+        )
+        for i, k in enumerate(kids):
+            g.db.execute(
+                "UPDATE blocks SET parent_id = ?, sort_order = ? WHERE id = ?",
+                (parent_id, pos + 1 + i, k["id"]),
+            )
+        g.db.execute("DELETE FROM blocks WHERE id = ?", (block_id,))
+        g.db.commit()
+        return jsonify({"deleted": block_id, "affected_children": child_count, "kept_children": n})
 
     g.db.execute("DELETE FROM blocks WHERE id = ?", (block_id,))
     g.db.commit()

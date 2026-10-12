@@ -40,6 +40,7 @@ cd frontend && npm run dev # 前端 http://localhost:5173
 | 2026-10-10 | feature/time-sorting | FR-04：时间轴排序切换（文档顺序/创建时间/工作开始时间）、按工作时段分组浏览、平铺/折叠视图切换、卡片类型化摘要+按需展开、工作开始/结束时间编辑（datetime-local）、后端时间字段允许显式清空 | ✅ 已合并 |
 | 2026-10-10 | feature/search-context | FR-05：全文搜索 API（LIKE 多关键词 AND，文档名+块标题+内容）、搜索 UI（关键词高亮 mark、文档/块命中分组）、日期浏览（创建/工作开始日期，可与关键词组合）、块命中跳转定位高亮、编辑器停留位置记录（last_position）、首页"继续上次工作"入口 | ✅ 已合并 |
 | 2026-10-10 | feature/attachments | FR-07：附件 API（multipart 上传托管存储 / 引用原始路径）、附件管理页（搜索/类型/大小/引用计数/所属记录跳转/失效警告）、删除引用检查（被引用 409 拒绝）、图片内容块迁移至附件系统（attachment_id 引用，兼容旧 dataURL） | ✅ 已合并 |
+| 2026-10-12 | feature/block-delete-rules | FR-08：块删除确认对话框（影响范围：直接子块/后代子块计数）、删除父块时可选保留子块（keep_children=1 提升为上一级，排序原位插入）、无子块简化确认；文件夹/文档删除确认已在 FR-01 完成 | ✅ 已合并 |
 
 ### 数据库 Schema
 
@@ -76,6 +77,7 @@ cd frontend && npm run dev # 前端 http://localhost:5173
 - [x] GET /api/attachments — 附件列表（q 按文件名搜索；含引用计数 ref_count、引用路径有效性 path_exists、所属记录 used_by）
 - [x] GET /api/attachments/:id/file — 获取附件文件内容（send_file；引用失效返回 410）
 - [x] DELETE /api/attachments/:id — 删除附件（被引用返回 409 拒绝；仅托管文件物理删除）
+- [x] DELETE /api/blocks/:id?keep_children=1 — 删除块并保留直接子块（提升到被删块父级、排原位置之后；默认级联删除全部后代）
 
 ### 前端页面
 
@@ -164,9 +166,9 @@ cd frontend && npm run dev # 前端 http://localhost:5173
 
 - [x] 后层级联删除（SQLite ON DELETE CASCADE）
 - [x] 默认文件夹不可删除
-- [ ] 删除确认对话框（前端）
-- [ ] 影响范围展示
-- [ ] 删除父块时选择子块是否一并删除
+- [x] 删除确认对话框（前端；文件夹/文档在 FR-01，任务块/子块本轮补齐）
+- [x] 影响范围展示（块删除对话框显示直接子块/后代子块计数；文件夹/文档已在 FR-01）
+- [x] 删除父块时选择子块是否一并删除（checkbox 保留选项，keep_children=1 提升为上一级任务块）
 
 ### FR-09: 快速记录 / 收件箱（P0）
 
