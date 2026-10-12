@@ -1,10 +1,14 @@
 <script setup lang="ts">
+/** 文档流编辑器：进入即文档，直接输入即任务（Notion/飞书式交互）。
+ * Enter 新建任务 / Shift+Enter 换行 / Tab 缩进为子任务 / 斜杠命令插入富内容。
+ */
 import { ref, computed, watch, nextTick, onMounted, onUnmounted } from 'vue'
 import { useRouter, useRoute, onBeforeRouteLeave } from 'vue-router'
 import { api } from '@/composables/useApi'
 import ContentEditor from '@/components/ContentEditor.vue'
+import SlashMenu from '@/components/SlashMenu.vue'
 import ConfirmDialog from '@/components/ConfirmDialog.vue'
-import type { Document, Block, ContentBlock } from '@/types'
+import type { Document, Block, ContentBlock, SlashItem } from '@/types'
 
 const props = defineProps<{ id: string }>()
 const router = useRouter()
@@ -12,13 +16,11 @@ const route = useRoute()
 
 const doc = ref<Document | null>(null)
 const blocks = ref<Block[]>([])
-const newBlockTitle = ref('')
 
 // ── 内容块模板（localStorage 持久化，前端本地实现）──
 const TEMPLATE_KEY = 'workmark_block_templates'
 interface BlockTemplate { name: string; content: string }
 const templates = ref<BlockTemplate[]>(loadTemplates())
-const pickedTemplate = ref<number | null>(null)
 
 function loadTemplates(): BlockTemplate[] {
   try {
@@ -39,14 +41,24 @@ function saveBlockAsTemplate(block: Block) {
   persistTemplates()
 }
 
-// ── 数据加载 ──
+// ── 数据加载（空文档自动创建首块，进入即可输入）──
 onMounted(async () => {
   doc.value = await api.get<Document>(`/documents/${props.id}`)
   blocks.value = await api.get<Block[]>(`/blocks/document/${props.id}`)
+  if (blocks.value.length === 0) {
+    const b = await api.post<Block>('/blocks', { document_id: Number(props.id), title: '', content: '[]' })
+    blocks.value.push(b)
+  }
   // 恢复停留位置：URL ?block= 优先，其次文档 last_position
   const fromQuery = Number(route.query.block) || 0
   const target = fromQuery || parseLastPosition(doc.value.last_position)
-  if (target) focusBlock(target)
+  if (target && blocks.value.some(b => b.id === target)) focusBlock(target)
+  else if (blocks.value.length) focusRow(blocks.value[0].id, 'end')
+  window.addEventListener('keydown', onKeydown)
+  window.addEventListener('beforeunload', onBeforeUnload)
+  window.addEventListener('mousedown', onDocMouseDown, true)
+  window.addEventListener('scroll', onWinScroll, true)
+  window.addEventListener('resize', onWinScroll)
 })
 
 /** 解析 last_position JSON（容错），返回 block_id 或 0。 */
@@ -83,6 +95,12 @@ type SortMode = 'doc' | 'created' | 'work_start' | 'work_period'
 const sortMode = ref<SortMode>('doc')
 const collapsedView = ref(false)
 const expandedIds = ref(new Set<number>())
+const SORT_OPTIONS = [
+  { value: 'doc', label: '文档顺序' },
+  { value: 'created', label: '创建时间' },
+  { value: 'work_start', label: '工作开始' },
+  { value: 'work_period', label: '工作时段' },
+] as const
 
 watch([sortMode, collapsedView], () => { expandedIds.value = new Set() })
 
@@ -106,11 +124,15 @@ function cmpBlocks(a: Block, b: Block): number {
     return a.created_at.localeCompare(b.created_at) || a.id - b.id
   }
   if (sortMode.value === 'work_start') {
-    // 未设置时间的块排最后，其余按工作开始时间升序
     const ka = a.work_start_time ?? '9999-12-31'
     const kb = b.work_start_time ?? '9999-12-31'
     return ka.localeCompare(kb) || a.created_at.localeCompare(b.created_at) || a.id - b.id
   }
+  return a.sort_order - b.sort_order || a.id - b.id
+}
+
+/** 文档原始顺序（结构操作 Enter/Tab/拖拽始终按此语义执行）。 */
+function byOrder(a: Block, b: Block): number {
   return a.sort_order - b.sort_order || a.id - b.id
 }
 
@@ -145,6 +167,43 @@ const displayGroups = computed<WorkGroup[]>(() => {
   if (sortMode.value === 'work_period') return workGroups.value
   return [{ label: '', blocks: topLevelBlocks.value }]
 })
+
+// ── 扁平化行模型（文档流渲染）──
+type FlatRow =
+  | { kind: 'group'; label: string; count: number }
+  | { kind: 'block'; block: Block; depth: 0 | 1; index: number }
+type BlockRow = Extract<FlatRow, { kind: 'block' }>
+
+const flatRows = computed<FlatRow[]>(() => {
+  const rows: FlatRow[] = []
+  let i = 0
+  for (const g of displayGroups.value) {
+    if (g.label) rows.push({ kind: 'group', label: g.label, count: g.blocks.length })
+    for (const top of g.blocks) {
+      rows.push({ kind: 'block', block: top, depth: 0, index: i++ })
+      if (isExpanded(top.id)) {
+        for (const c of childrenOf(top.id)) rows.push({ kind: 'block', block: c, depth: 1, index: i++ })
+      }
+    }
+  }
+  return rows
+})
+
+/** 在 flatRows 中找当前行的前/后一个任务行 id（跳过分组标题行）。 */
+function neighborRowId(blockId: number, dir: -1 | 1): number | null {
+  const rows = flatRows.value
+  const idx = rows.findIndex(r => r.kind === 'block' && r.block.id === blockId)
+  if (idx === -1) return null
+  for (let j = idx + dir; j >= 0 && j < rows.length; j += dir) {
+    const r = rows[j]
+    if (r.kind === 'block') return r.block.id
+  }
+  return null
+}
+
+function hasContent(block: Block): boolean {
+  return block.content !== '[]' && block.content !== ''
+}
 
 /** 折叠视图卡片摘要：首块类型化描述 + 内容块总数。 */
 function summarize(block: Block): string {
@@ -182,70 +241,20 @@ function toLocalInput(s: string | null): string {
   return s ? s.replace(' ', 'T').slice(0, 16) : ''
 }
 
-// ── 块 CRUD ──
-async function addBlock() {
-  const tpl = pickedTemplate.value !== null ? templates.value[pickedTemplate.value] : null
-  const block = await api.post<Block>('/blocks', {
-    document_id: Number(props.id),
-    title: newBlockTitle.value || undefined,
-    content: tpl ? tpl.content : '[]',
-  })
-  blocks.value.push(block)
-  newBlockTitle.value = ''
-  pickedTemplate.value = null
-}
-
-async function addSubBlock(parentId: number) {
-  const block = await api.post<Block>('/blocks', {
-    document_id: Number(props.id),
-    parent_id: parentId,
-    title: '补充记录',
-    content: '[]',
-  })
-  blocks.value.push(block)
-}
-
-// ── 删除确认对话框（FR-08：影响范围 + 子块保留选项）──
-const deleteTarget = ref<{ block: Block; direct: number; descendants: number } | null>(null)
-const keepChildren = ref(false)
-
-const deleteDetails = computed(() => {
-  if (!deleteTarget.value) return []
-  const t = deleteTarget.value
-  if (t.direct === 0) return []
-  return [
-    { label: '直接子块', value: `${t.direct} 个` },
-    { label: '后代子块（含孙级）', value: `${t.descendants} 个` },
-  ]
-})
-
-async function deleteBlock(blockId: number) {
-  const block = blocks.value.find(b => b.id === blockId)
-  if (!block) return
-  const direct = childrenOf(blockId).length
-  let descendants = 0
-  const walk = (pid: number) => {
-    for (const c of childrenOf(pid)) { descendants++; walk(c.id) }
+/** 时间 chip：设了工作时段优先显示，否则显示创建时间。 */
+function timeChip(block: Block): { text: string; cls: string; tip: string } {
+  if (block.work_start_time) {
+    const s = block.work_start_time.slice(5, 16).replace('T', ' ')
+    const e = block.work_end_time ? ' ~ ' + block.work_end_time.slice(11, 16) : ' ~'
+    return {
+      text: s + e, cls: 'chip-work',
+      tip: `工作 ${formatDateTime(block.work_start_time)} → ${formatDateTime(block.work_end_time) || '进行中'}`,
+    }
   }
-  walk(blockId)
-  deleteTarget.value = { block, direct, descendants }
-  keepChildren.value = false
+  return { text: block.created_at.slice(5, 16), cls: 'chip-created', tip: '创建于 ' + formatDateTime(block.created_at) + '，点击设置工作时段' }
 }
 
-async function confirmDeleteBlock() {
-  if (!deleteTarget.value) return
-  const { block } = deleteTarget.value
-  deleteTarget.value = null
-  await api.del(`/blocks/${block.id}${keepChildren.value ? '?keep_children=1' : ''}`)
-  await reloadBlocks()
-}
-
-async function copyBlock(block: Block) {
-  await api.post(`/blocks/${block.id}/copy`)
-  await reloadBlocks()
-}
-
-// ── 自动保存（防抖）+ 保存状态 + 撤销/重做 ──
+// ── 自动保存（防抖）+ 保存状态 + 撤销/重做（title/content 双字段）──
 type SaveState = 'idle' | 'pending' | 'saving' | 'saved' | 'error'
 const saveState = ref<SaveState>('idle')
 const SAVE_DELAY = 800
@@ -284,28 +293,36 @@ async function flushSaves(): Promise<void> {
   }
 }
 
-interface UndoPatch { blockId: number; before: string; after: string }
+interface UndoPatch { blockId: number; field: 'title' | 'content'; before: string; after: string }
 const undoStack = ref<UndoPatch[]>([])
 const redoStack = ref<UndoPatch[]>([])
 const UNDO_LIMIT = 100
 const UNDO_COALESCE_MS = 1000
-// 最近一次记录的 patch 引用（用于把连续输入合并为一个撤销步骤）
 let lastPatch: (UndoPatch & { at: number }) | null = null
 
-function recordContentChange(blockId: number, before: string, after: string) {
+function recordBlockChange(blockId: number, field: 'title' | 'content', before: string, after: string) {
   if (before === after) return
   const now = Date.now()
-  if (lastPatch && lastPatch.blockId === blockId && now - lastPatch.at < UNDO_COALESCE_MS) {
-    // 同一块的连续输入：合并为单个撤销步骤（撤销粒度 = 输入停顿）
+  if (lastPatch && lastPatch.blockId === blockId && lastPatch.field === field && now - lastPatch.at < UNDO_COALESCE_MS) {
+    // 同一块同一字段的连续输入：合并为单个撤销步骤
     lastPatch.after = after
     lastPatch.at = now
   } else {
-    const patch: UndoPatch & { at: number } = { blockId, before, after, at: now }
+    const patch: UndoPatch & { at: number } = { blockId, field, before, after, at: now }
     undoStack.value.push(patch)
     lastPatch = patch
     if (undoStack.value.length > UNDO_LIMIT) undoStack.value.shift()
   }
   redoStack.value = []
+}
+
+function applyTitle(blockId: number, title: string) {
+  const block = blocks.value.find(b => b.id === blockId)
+  if (!block) return
+  block.title = title
+  lastEditedBlockId.value = blockId
+  pendingUpdates.set(blockId, { ...(pendingUpdates.get(blockId) || {}), title })
+  scheduleFlush()
 }
 
 function applyContent(blockId: number, content: string) {
@@ -316,23 +333,28 @@ function applyContent(blockId: number, content: string) {
   scheduleFlush()
 }
 
+function applyField(blockId: number, field: 'title' | 'content', value: string) {
+  if (field === 'title') applyTitle(blockId, value)
+  else applyContent(blockId, value)
+}
+
 function undo() {
   const p = undoStack.value.pop()
   lastPatch = null
   if (!p) return
-  applyContent(p.blockId, p.before)
-  redoStack.value.push({ blockId: p.blockId, before: p.before, after: p.after })
+  applyField(p.blockId, p.field, p.before)
+  redoStack.value.push({ blockId: p.blockId, field: p.field, before: p.before, after: p.after })
 }
 
 function redo() {
   const p = redoStack.value.pop()
   lastPatch = null
   if (!p) return
-  applyContent(p.blockId, p.after)
-  undoStack.value.push({ blockId: p.blockId, before: p.before, after: p.after })
+  applyField(p.blockId, p.field, p.after)
+  undoStack.value.push({ blockId: p.blockId, field: p.field, before: p.before, after: p.after })
 }
 
-// 键盘快捷键：仅在非输入焦点时接管（输入框内保留原生撤销）
+// 全局快捷键：仅在非输入焦点时接管（输入框内由 onRowKeydown 接管）
 function onKeydown(e: KeyboardEvent) {
   if (!e.ctrlKey) return
   const tag = (e.target as HTMLElement)?.tagName
@@ -350,14 +372,12 @@ function onBeforeUnload(e: BeforeUnloadEvent) {
   }
 }
 
-onMounted(() => {
-  window.addEventListener('keydown', onKeydown)
-  window.addEventListener('beforeunload', onBeforeUnload)
-})
-
 onUnmounted(() => {
   window.removeEventListener('keydown', onKeydown)
   window.removeEventListener('beforeunload', onBeforeUnload)
+  window.removeEventListener('mousedown', onDocMouseDown, true)
+  window.removeEventListener('scroll', onWinScroll, true)
+  window.removeEventListener('resize', onWinScroll)
   flushSaves()
 })
 
@@ -377,13 +397,6 @@ onBeforeRouteLeave(async () => {
   }
 })
 
-async function updateBlockTitle(block: Block, title: string) {
-  block.title = title
-  lastEditedBlockId.value = block.id
-  pendingUpdates.set(block.id, { ...(pendingUpdates.get(block.id) || {}), title })
-  scheduleFlush()
-}
-
 /** 更新工作开始/结束时间（传空值即清空，走同一防抖队列）。 */
 function updateBlockTime(block: Block, field: 'work_start_time' | 'work_end_time', value: string) {
   const v = value || null
@@ -394,9 +407,369 @@ function updateBlockTime(block: Block, field: 'work_start_time' | 'work_end_time
 }
 
 function updateBlockContent(block: Block, content: string) {
-  recordContentChange(block.id, block.content, content)
+  recordBlockChange(block.id, 'content', block.content, content)
   applyContent(block.id, content)
   lastEditedBlockId.value = block.id
+}
+
+/** 往块的 content 追加内容块（斜杠命令 / ``` / 模板插入），走撤销记录。 */
+function appendContentBlocks(blockId: number, items: ContentBlock[]) {
+  const block = blocks.value.find(b => b.id === blockId)
+  if (!block) return
+  const arr = JSON.parse(block.content || '[]') as ContentBlock[]
+  const before = block.content
+  arr.push(...items)
+  const after = JSON.stringify(arr)
+  recordBlockChange(blockId, 'content', before, after)
+  applyContent(blockId, after)
+}
+
+function makeDefaultContent(type: ContentBlock['type']): ContentBlock {
+  const base: ContentBlock = { type }
+  if (type === 'text' || type === 'shell' || type === 'output' || type === 'image') base.content = ''
+  if (type === 'code') { base.content = ''; base.language = 'python' }
+  if (type === 'todo') base.items = [{ text: '', done: false }]
+  if (type === 'table') base.rows = [['列1', '列2'], ['', '']]
+  return base
+}
+
+// ── 文档标题（正文顶部可编辑大标题）──
+const docTitleEl = ref<HTMLTextAreaElement | null>(null)
+let docTitleTimer: number | null = null
+
+function onDocTitleInput(e: Event) {
+  const ta = e.target as HTMLTextAreaElement
+  autoResize(ta)
+  if (!doc.value) return
+  doc.value.name = ta.value
+  if (docTitleTimer !== null) clearTimeout(docTitleTimer)
+  docTitleTimer = window.setTimeout(() => {
+    api.put(`/documents/${props.id}`, { name: doc.value!.name }).catch(() => {})
+  }, 500)
+}
+
+// ── textarea 自动增高（field-sizing 兜底）──
+function autoResize(el: HTMLTextAreaElement | null | undefined) {
+  if (!el) return
+  el.style.height = 'auto'
+  el.style.height = el.scrollHeight + 'px'
+}
+
+watch(flatRows, () => {
+  nextTick(() => {
+    document.querySelectorAll<HTMLTextAreaElement>('textarea.row-input').forEach(autoResize)
+  })
+})
+
+// ── 焦点管理 ──
+function focusRow(blockId: number, pos: 'start' | 'end' | number = 'end') {
+  nextTick(() => {
+    const ta = document.querySelector<HTMLTextAreaElement>(`[data-block-id="${blockId}"] textarea.row-input`)
+    if (!ta) return // 行被折叠隐藏时静默跳过
+    ta.focus()
+    const end = ta.value.length
+    const idx = pos === 'start' ? 0 : pos === 'end' ? end : Math.min(pos as number, end)
+    ta.setSelectionRange(idx, idx)
+    autoResize(ta)
+  })
+}
+
+// ── 行输入：标题更新 + 斜杠菜单触发 + ``` 检测 ──
+const slashMenu = ref<{ blockId: number; slashPos: number; anchor: DOMRect } | null>(null)
+const slashHi = ref(0)
+
+function closeSlash() { slashMenu.value = null }
+
+const slashItems = computed<SlashItem[]>(() => {
+  const base: SlashItem[] = [
+    { key: 'text', label: '文本', desc: '正文段落，支持 Markdown', icon: '¶', type: 'text' },
+    { key: 'code', label: '代码', desc: '带高亮的代码块', icon: '{}', type: 'code' },
+    { key: 'shell', label: '命令', desc: '终端命令', icon: '>_', type: 'shell' },
+    { key: 'output', label: '输出', desc: '粘贴终端输出', icon: '≣', type: 'output' },
+    { key: 'todo', label: '待办', desc: '可勾选清单', icon: '☑', type: 'todo' },
+    { key: 'table', label: '表格', desc: '简单表格', icon: '▦', type: 'table' },
+    { key: 'image', label: '图片', desc: '上传图片', icon: '🖼', type: 'image' },
+  ]
+  templates.value.forEach((t, i) =>
+    base.push({ key: 'tpl-' + i, label: t.name, desc: '插入模板内容', icon: '▤', tplIndex: i }),
+  )
+  return base
+})
+
+function onRowInput(row: BlockRow, e: Event) {
+  const ta = e.target as HTMLTextAreaElement
+  const block = row.block
+  const now = ta.value
+  const pos = ta.selectionStart ?? 0
+
+  recordBlockChange(block.id, 'title', block.title ?? '', now)
+  applyTitle(block.id, now)
+  autoResize(ta)
+
+  // ``` 单独成行 → 转为代码内容块
+  if (now.trim() === '```') {
+    recordBlockChange(block.id, 'title', now, '')
+    applyTitle(block.id, '')
+    appendContentBlocks(block.id, [{ type: 'code', content: '', language: 'python' }])
+    closeSlash()
+    return
+  }
+
+  // 斜杠菜单打开中：光标退回 slashPos 之前或 '/' 被删 → 关闭
+  if (slashMenu.value && slashMenu.value.blockId === block.id) {
+    if (pos <= slashMenu.value.slashPos || now[slashMenu.value.slashPos] !== '/') closeSlash()
+  }
+  // 触发斜杠菜单：行首或空白后输入 '/'
+  if (!slashMenu.value || slashMenu.value.blockId !== block.id) {
+    const prev = now[pos - 1]
+    if (prev === '/' && (pos === 1 || /\s/.test(now[pos - 2] ?? ' '))) {
+      slashMenu.value = { blockId: block.id, slashPos: pos - 1, anchor: ta.getBoundingClientRect() }
+      slashHi.value = 0
+    }
+  }
+}
+
+function onSlashSelect(item: SlashItem) {
+  const m = slashMenu.value
+  if (!m) return
+  closeSlash()
+  const block = blocks.value.find(b => b.id === m.blockId)
+  if (!block) return
+  const text = block.title ?? ''
+  const clean = text.slice(0, m.slashPos) + text.slice(m.slashPos + 1) // 移除 '/'
+  recordBlockChange(block.id, 'title', text, clean)
+  applyTitle(block.id, clean)
+  if (item.tplIndex !== undefined) {
+    try {
+      appendContentBlocks(block.id, JSON.parse(templates.value[item.tplIndex].content) as ContentBlock[])
+    } catch { /* 模板内容损坏时忽略 */ }
+  } else if (item.type) {
+    appendContentBlocks(block.id, [makeDefaultContent(item.type)])
+  }
+  focusRow(block.id, m.slashPos)
+}
+
+// ── 行键盘行为 ──
+function onRowKeydown(row: BlockRow, e: KeyboardEvent) {
+  // 中文输入法组合期不拦截任何键
+  if (e.isComposing || e.keyCode === 229) return
+  const block = row.block
+  const ta = e.target as HTMLTextAreaElement
+
+  // 斜杠菜单键盘导航
+  if (slashMenu.value && slashMenu.value.blockId === block.id && slashItems.value.length) {
+    if (e.key === 'ArrowDown') { e.preventDefault(); slashHi.value = (slashHi.value + 1) % slashItems.value.length; return }
+    if (e.key === 'ArrowUp') { e.preventDefault(); slashHi.value = (slashHi.value - 1 + slashItems.value.length) % slashItems.value.length; return }
+    if (e.key === 'Enter') { e.preventDefault(); onSlashSelect(slashItems.value[slashHi.value]); return }
+    if (e.key === 'Escape') { e.preventDefault(); closeSlash(); return }
+    if (e.key === ' ') { closeSlash() } // 空格关闭菜单，空格本身照常输入
+  }
+
+  // 行内撤销/重做（自建栈：跨块结构操作原生栈无法覆盖）
+  if (e.ctrlKey || e.metaKey) {
+    const key = e.key.toLowerCase()
+    if (key === 'z' && !e.shiftKey) { e.preventDefault(); undo(); return }
+    if ((key === 'z' && e.shiftKey) || key === 'y') { e.preventDefault(); redo(); return }
+  }
+
+  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); splitRowAtCursor(row, ta); return }
+  if (e.key === 'Enter' && e.shiftKey) { e.preventDefault(); insertNewlineAtCursor(row, ta); return }
+  if (e.key === 'Tab') { e.preventDefault(); e.shiftKey ? outdentBlock(row) : indentBlock(row); return }
+  if (e.key === 'Backspace' && ta.selectionStart === 0 && ta.selectionEnd === 0) { maybeDeleteEmptyRow(row, e); return }
+  if (e.key === 'ArrowUp' && ta.selectionStart === 0 && ta.selectionEnd === 0) {
+    const prev = neighborRowId(block.id, -1)
+    if (prev !== null) { e.preventDefault(); focusRow(prev, 'end') }
+    return
+  }
+  if (e.key === 'ArrowDown' && ta.selectionStart === ta.value.length && ta.selectionEnd === ta.value.length) {
+    const next = neighborRowId(block.id, 1)
+    if (next !== null) { e.preventDefault(); focusRow(next, 'start') }
+    return
+  }
+}
+
+/** Enter：光标处拆分，tail 移入新块（同级插入当前块之后，当前块的子块不受影响）。 */
+async function splitRowAtCursor(row: BlockRow, ta: HTMLTextAreaElement) {
+  const block = row.block
+  const pos = ta.selectionStart ?? 0
+  const text = block.title ?? ''
+  const head = text.slice(0, pos)
+  const tail = text.slice(pos)
+
+  // 空行防堆块：当前行与 tail 全空且下方还有行 → 只聚焦下一行
+  if (!head.trim() && !tail) {
+    const next = neighborRowId(block.id, 1)
+    if (next !== null) { focusRow(next, 'start'); return }
+  }
+
+  recordBlockChange(block.id, 'title', text, head)
+  applyTitle(block.id, head)
+  try {
+    const nb = await api.post<Block>('/blocks', {
+      document_id: Number(props.id),
+      parent_id: block.parent_id,
+      after_id: block.id,
+      title: tail,
+      content: '[]',
+    })
+    // 中间插入会平移兄弟块 sort_order，需重新拉取以保持本地顺序一致
+    await reloadBlocks()
+    focusRow(nb.id, 'start')
+  } catch (err) {
+    // after_id 竞态等失败：回退为末尾追加
+    console.warn('after_id 插入失败，回退追加', err)
+    const nb = await api.post<Block>('/blocks', {
+      document_id: Number(props.id),
+      parent_id: block.parent_id,
+      title: tail,
+      content: '[]',
+    })
+    blocks.value.push(nb)
+    focusRow(nb.id, 'start')
+  }
+}
+
+/** Shift+Enter：任务内软换行。 */
+function insertNewlineAtCursor(row: BlockRow, ta: HTMLTextAreaElement) {
+  const pos = ta.selectionStart ?? 0
+  const text = row.block.title ?? ''
+  const next = text.slice(0, pos) + '\n' + text.slice(ta.selectionEnd ?? pos)
+  recordBlockChange(row.block.id, 'title', text, next)
+  applyTitle(row.block.id, next)
+  focusRow(row.block.id, pos + 1)
+}
+
+/** Tab：顶层块变为前一个顶层兄弟的子块（排其子块末尾）。 */
+async function indentBlock(row: BlockRow) {
+  const block = row.block
+  if (row.depth !== 0) return
+  const tops = blocks.value.filter(b => b.parent_id === null).sort(byOrder)
+  const idx = tops.findIndex(b => b.id === block.id)
+  if (idx <= 0) return // 无前一个兄弟
+  if (childrenOf(block.id).length > 0) return // 自身有子块：后端要求父级必须是顶层块
+  const target = tops[idx - 1]
+  const updates: { id: number; parent_id: number | null; sort_order: number }[] = []
+  tops.filter(b => b.id !== block.id).forEach((b, i) => updates.push({ id: b.id, parent_id: null, sort_order: i }))
+  const sibs = blocks.value.filter(b => b.parent_id === target.id).sort(byOrder)
+  sibs.forEach((c, i) => updates.push({ id: c.id, parent_id: target.id, sort_order: i }))
+  updates.push({ id: block.id, parent_id: target.id, sort_order: sibs.length })
+  await api.post('/blocks/reorder', { updates })
+  await reloadBlocks()
+  focusRow(block.id, 'end')
+}
+
+/** Shift+Tab：子块升回顶层，插到父块之后。 */
+async function outdentBlock(row: BlockRow) {
+  const block = row.block
+  if (row.depth !== 1 || block.parent_id === null) return
+  const parent = blocks.value.find(b => b.id === block.parent_id)
+  if (!parent) return
+  const updates: { id: number; parent_id: number | null; sort_order: number }[] = []
+  const sibs = blocks.value.filter(b => b.parent_id === parent.id && b.id !== block.id).sort(byOrder)
+  sibs.forEach((c, i) => updates.push({ id: c.id, parent_id: parent.id, sort_order: i }))
+  const tops = blocks.value.filter(b => b.parent_id === null && b.id !== block.id).sort(byOrder)
+  const pIdx = tops.findIndex(b => b.id === parent.id)
+  if (pIdx === -1) return
+  tops.splice(pIdx + 1, 0, block)
+  tops.forEach((b, i) => updates.push({ id: b.id, parent_id: null, sort_order: i }))
+  await api.post('/blocks/reorder', { updates })
+  await reloadBlocks()
+  focusRow(block.id, 'end')
+}
+
+/** Backspace 行首：空块且无子块 → 删除并聚焦上一行。 */
+async function maybeDeleteEmptyRow(row: BlockRow, e: KeyboardEvent) {
+  const block = row.block
+  if (block.title) return // 有文本不拦
+  if (childrenOf(block.id).length > 0) return // 有子块不删
+  e.preventDefault()
+  const prev = neighborRowId(block.id, -1)
+  pendingUpdates.delete(block.id) // 防止队列残留更新打到已删块
+  try {
+    await api.del(`/blocks/${block.id}`)
+  } catch {
+    return
+  }
+  blocks.value = blocks.value.filter(b => b.id !== block.id)
+  if (blocks.value.length === 0) {
+    const nb = await api.post<Block>('/blocks', { document_id: Number(props.id), title: '', content: '[]' })
+    blocks.value.push(nb)
+    focusRow(nb.id, 'end')
+    return
+  }
+  if (prev !== null) focusRow(prev, 'end')
+}
+
+// ── 块删除确认对话框（FR-08：影响范围 + 子块保留选项）──
+const deleteTarget = ref<{ block: Block; direct: number; descendants: number } | null>(null)
+const keepChildren = ref(false)
+
+const deleteDetails = computed(() => {
+  if (!deleteTarget.value) return []
+  const t = deleteTarget.value
+  if (t.direct === 0) return []
+  return [
+    { label: '直接子块', value: `${t.direct} 个` },
+    { label: '后代子块（含孙级）', value: `${t.descendants} 个` },
+  ]
+})
+
+function deleteBlock(blockId: number) {
+  const block = blocks.value.find(b => b.id === blockId)
+  if (!block) return
+  const direct = childrenOf(blockId).length
+  let descendants = 0
+  const walk = (pid: number) => {
+    for (const c of childrenOf(pid)) { descendants++; walk(c.id) }
+  }
+  walk(blockId)
+  deleteTarget.value = { block, direct, descendants }
+  keepChildren.value = false
+}
+
+async function confirmDeleteBlock() {
+  if (!deleteTarget.value) return
+  const { block } = deleteTarget.value
+  deleteTarget.value = null
+  await api.del(`/blocks/${block.id}${keepChildren.value ? '?keep_children=1' : ''}`)
+  await reloadBlocks()
+}
+
+async function copyBlock(block: Block) {
+  await api.post(`/blocks/${block.id}/copy`)
+  await reloadBlocks()
+}
+
+// ── 浮层管理：时间 popover / 更多菜单 / 斜杠菜单 ──
+const timePopoverId = ref<number | null>(null)
+const moreMenuId = ref<number | null>(null)
+
+function toggleTimePopover(id: number) {
+  timePopoverId.value = timePopoverId.value === id ? null : id
+  moreMenuId.value = null
+  closeSlash()
+}
+
+function toggleMoreMenu(id: number) {
+  moreMenuId.value = moreMenuId.value === id ? null : id
+  timePopoverId.value = null
+  closeSlash()
+}
+
+function closeFloats() {
+  timePopoverId.value = null
+  moreMenuId.value = null
+}
+
+function onDocMouseDown(e: MouseEvent) {
+  const t = e.target as HTMLElement
+  if (!t.closest('.row-popover') && !t.closest('.row-time') && !t.closest('.row-more')) closeFloats()
+  if (!t.closest('.slash-menu')) closeSlash()
+}
+
+function onWinScroll() {
+  closeFloats()
+  closeSlash()
 }
 
 // ── 拖拽排序（同级重排 + 父子层级调整 + 落点提示）──
@@ -419,7 +792,7 @@ function onDragOver(block: Block, e: DragEvent) {
   if (dragBlockId.value === null) return
   const dragged = blocks.value.find(b => b.id === dragBlockId.value)
   if (!dragged) return
-  // 顶层块只与其他顶层块交互（避免把自己变成自己的子块）
+  // 顶层块只与其他顶层块交互（避免把自己变成别人的子块）
   if (dragged.parent_id === null && block.parent_id !== null) return
   e.preventDefault()
   if (e.dataTransfer) e.dataTransfer.dropEffect = 'move'
@@ -428,8 +801,8 @@ function onDragOver(block: Block, e: DragEvent) {
   const y = e.clientY - rect.top
   const h = rect.height
   let zone: DropZone = y < h * 0.25 ? 'before' : y > h * 0.75 ? 'after' : 'child'
-  // 子块不能容纳子级：child 落点转为 after（仅顶层目标才会保留 child）
-  if (zone === 'child' && block.parent_id !== null) zone = 'after'
+  // 子块不能容纳子级 / 被拖块自身有子块（后端要求父级为顶层）：child 落点转为 after
+  if (zone === 'child' && (block.parent_id !== null || childrenOf(dragged.id).length > 0)) zone = 'after'
   dropHint.value = { id: block.id, zone }
 }
 
@@ -446,10 +819,10 @@ async function onDrop(block: Block, e: DragEvent) {
   if (!dragged || !hint || hint.id !== block.id) return
   if (dragged.id === block.id) return
   if (dragged.parent_id === null && block.parent_id !== null) return
+  if (hint.zone === 'child' && childrenOf(dragged.id).length > 0) return
 
   type Upd = { id: number; parent_id: number | null; sort_order: number }
   const updates: Upd[] = []
-  const byOrder = (a: Block, b: Block) => a.sort_order - b.sort_order || a.id - b.id
 
   if (hint.zone === 'child') {
     // 顶层块 → 另一顶层块的子块（追加到末尾）
@@ -485,8 +858,7 @@ async function onDrop(block: Block, e: DragEvent) {
 <template>
   <div class="editor" v-if="doc">
     <header class="editor-header">
-      <button @click="router.push('/')">← 返回</button>
-      <h2>{{ doc.name }}</h2>
+      <button class="icon-btn" @click="router.push('/')">← 返回</button>
       <span class="ce-spacer"></span>
       <button class="icon-btn" title="撤销 (Ctrl+Z)" :disabled="undoStack.length === 0" @click="undo">↶ 撤销</button>
       <button class="icon-btn" title="重做 (Ctrl+Y)" :disabled="redoStack.length === 0" @click="redo">↷ 重做</button>
@@ -494,152 +866,135 @@ async function onDrop(block: Block, e: DragEvent) {
     </header>
 
     <div class="editor-body">
-      <div class="add-block-bar">
-        <input v-model="newBlockTitle" placeholder="任务块标题（可选）" @keyup.enter="addBlock" />
-        <select v-if="templates.length" v-model="pickedTemplate" class="tpl-select" title="从模板创建">
-          <option :value="null">模板（可选）</option>
-          <option v-for="(t, i) in templates" :key="i" :value="i">{{ t.name }}</option>
-        </select>
-        <button class="primary" @click="addBlock">+ 添加任务块</button>
-      </div>
+      <!-- 文档标题 -->
+      <textarea
+        ref="docTitleEl"
+        class="doc-title"
+        rows="1"
+        :value="doc.name"
+        placeholder="无标题文档"
+        @input="onDocTitleInput"
+        @keydown.enter.prevent="($event.target as HTMLTextAreaElement).blur()"
+      ></textarea>
 
-      <div class="timeline-toolbar">
-        <label class="tl-field">排序
-          <select v-model="sortMode">
-            <option value="doc">文档顺序</option>
-            <option value="created">创建时间</option>
-            <option value="work_start">工作开始时间</option>
-            <option value="work_period">工作时段（按日分组）</option>
-          </select>
-        </label>
-        <button class="tl-btn" @click="collapsedView = !collapsedView">{{ collapsedView ? '⊞ 平铺视图' : '⊟ 折叠视图' }}</button>
+      <!-- 排序 / 视图工具行 -->
+      <div class="doc-meta-bar">
+        <div class="seg">
+          <button
+            v-for="m in SORT_OPTIONS"
+            :key="m.value"
+            :class="{ on: sortMode === m.value }"
+            @click="sortMode = m.value"
+          >{{ m.label }}</button>
+        </div>
+        <button class="seg-toggle" @click="collapsedView = !collapsedView">{{ collapsedView ? '⊞ 平铺视图' : '⊟ 折叠视图' }}</button>
         <template v-if="collapsedView">
-          <button class="tl-btn" @click="expandAll">全部展开</button>
-          <button class="tl-btn" @click="collapseAll">全部收起</button>
+          <button class="seg-toggle" @click="expandAll">全部展开</button>
+          <button class="seg-toggle" @click="collapseAll">全部收起</button>
         </template>
-        <span v-if="sortMode !== 'doc'" class="tl-hint">排序视图仅调整展示顺序；拖拽调整顺序请切换回文档顺序视图</span>
+        <span v-if="sortMode !== 'doc'" class="tl-hint">排序仅影响展示；Enter/Tab/拖拽按文档顺序执行</span>
       </div>
 
-      <div v-if="topLevelBlocks.length === 0" class="empty">
-        暂无任务块，添加第一个开始记录。
-      </div>
-
-      <template v-for="group in displayGroups" :key="group.label || '__all__'">
-        <h3 v-if="group.label" class="work-group-title">
-          {{ group.label }}<small>{{ group.blocks.length }} 块</small>
+      <!-- 文档流行列表 -->
+      <template v-for="row in flatRows" :key="row.kind === 'group' ? 'g:' + row.label : 'b:' + row.block.id">
+        <h3 v-if="row.kind === 'group'" class="work-group-title">
+          {{ row.label }}<small>{{ row.count }} 块</small>
         </h3>
-        <template v-for="top in group.blocks" :key="top.id">
-          <!-- 顶层任务块 -->
-          <div
-            class="block-card"
-            :class="dropClass(top)"
-            :data-block-id="top.id"
-            :draggable="sortMode === 'doc'"
-            @dragstart="onDragStart(top, $event)"
-            @dragend="onDragEnd"
-            @dragover="onDragOver(top, $event)"
-            @drop="onDrop(top, $event)"
-          >
-            <div class="block-header">
-              <span v-if="sortMode === 'doc'" class="drag-handle" title="拖拽排序">⋮⋮</span>
-              <input
-                :value="top.title ?? ''"
-                class="block-title"
-                placeholder="无标题"
-                @change="updateBlockTitle(top, ($event.target as HTMLInputElement).value)"
-              />
-              <span class="block-time" :title="'创建时间 ' + formatDateTime(top.created_at)">{{ formatDateTime(top.created_at) }}</span>
-              <button v-if="collapsedView" class="icon-btn" @click="toggleExpand(top.id)">{{ isExpanded(top.id) ? '收起' : '展开' }}</button>
-              <button class="icon-btn" title="完整复制（含子块）" @click="copyBlock(top)">⧉ 复制</button>
-              <button class="icon-btn" title="内容存为模板" @click="saveBlockAsTemplate(top)">存为模板</button>
-              <button class="icon-btn danger" title="删除" @click="deleteBlock(top.id)">删除</button>
-            </div>
-            <div class="block-time-edit">
-              <label>开始
-                <input
-                  type="datetime-local"
-                  :value="toLocalInput(top.work_start_time)"
-                  @change="updateBlockTime(top, 'work_start_time', ($event.target as HTMLInputElement).value)"
-                />
-              </label>
-              <label>结束
-                <input
-                  type="datetime-local"
-                  :value="toLocalInput(top.work_end_time)"
-                  @change="updateBlockTime(top, 'work_end_time', ($event.target as HTMLInputElement).value)"
-                />
-              </label>
-            </div>
-            <div v-if="isExpanded(top.id)" class="block-content">
-              <ContentEditor
-                :model-value="top.content"
-                :block-id="top.id"
-                @update:model-value="updateBlockContent(top, $event)"
-              />
-            </div>
-            <div v-else class="block-summary" title="点击展开" @click="toggleExpand(top.id)">
-              {{ summarize(top) }}
-            </div>
-            <div v-if="isExpanded(top.id)" class="block-actions">
-              <button @click="addSubBlock(top.id)">+ 添加子块</button>
-            </div>
+
+        <div
+          v-else
+          class="doc-row"
+          :class="[row.depth === 1 ? 'depth-1' : 'depth-0', dropClass(row.block)]"
+          :data-block-id="row.block.id"
+          :draggable="sortMode === 'doc'"
+          @dragstart="onDragStart(row.block, $event)"
+          @dragend="onDragEnd"
+          @dragover="onDragOver(row.block, $event)"
+          @drop="onDrop(row.block, $event)"
+          @focusin="lastEditedBlockId = row.block.id"
+        >
+          <div class="row-main">
+            <span v-if="sortMode === 'doc'" class="row-handle" title="拖拽排序">⠿</span>
+            <button
+              class="row-time"
+              :class="timeChip(row.block).cls"
+              :title="timeChip(row.block).tip"
+              @click.stop="toggleTimePopover(row.block.id)"
+            >{{ timeChip(row.block).text }}</button>
+            <textarea
+              class="row-input"
+              rows="1"
+              :value="row.block.title ?? ''"
+              placeholder="输入任务，回车新建；输入 / 插入内容"
+              @input="onRowInput(row, $event)"
+              @keydown="onRowKeydown(row, $event)"
+              @blur="flushSaves()"
+            ></textarea>
+            <button
+              v-if="collapsedView"
+              class="row-more"
+              :title="isExpanded(row.block.id) ? '收起' : '展开'"
+              @click.stop="toggleExpand(row.block.id)"
+            >{{ isExpanded(row.block.id) ? '⊟' : '⊞' }}</button>
+            <button class="row-more" title="更多操作" @click.stop="toggleMoreMenu(row.block.id)">⋯</button>
           </div>
 
-          <!-- 子块 -->
-          <div
-            v-for="child in childrenOf(top.id)"
-            :key="child.id"
-            class="block-card sub-block"
-            :class="dropClass(child)"
-            :data-block-id="child.id"
-            :draggable="sortMode === 'doc'"
-            @dragstart="onDragStart(child, $event)"
-            @dragend="onDragEnd"
-            @dragover="onDragOver(child, $event)"
-            @drop="onDrop(child, $event)"
-          >
-            <div class="block-header">
-              <span v-if="sortMode === 'doc'" class="drag-handle" title="拖拽排序">⋮⋮</span>
+          <!-- 工作时段 popover -->
+          <div v-if="timePopoverId === row.block.id" class="row-popover" @mousedown.stop>
+            <label>开始
               <input
-                :value="child.title ?? ''"
-                class="block-title"
-                placeholder="无标题"
-                @change="updateBlockTitle(child, ($event.target as HTMLInputElement).value)"
+                type="datetime-local"
+                :value="toLocalInput(row.block.work_start_time)"
+                @change="updateBlockTime(row.block, 'work_start_time', ($event.target as HTMLInputElement).value)"
               />
-              <span class="block-time" :title="'创建时间 ' + formatDateTime(child.created_at)">{{ formatDateTime(child.created_at) }}</span>
-              <button v-if="collapsedView" class="icon-btn" @click="toggleExpand(child.id)">{{ isExpanded(child.id) ? '收起' : '展开' }}</button>
-              <button class="icon-btn danger" title="删除" @click="deleteBlock(child.id)">删除</button>
-            </div>
-            <div class="block-time-edit">
-              <label>开始
-                <input
-                  type="datetime-local"
-                  :value="toLocalInput(child.work_start_time)"
-                  @change="updateBlockTime(child, 'work_start_time', ($event.target as HTMLInputElement).value)"
-                />
-              </label>
-              <label>结束
-                <input
-                  type="datetime-local"
-                  :value="toLocalInput(child.work_end_time)"
-                  @change="updateBlockTime(child, 'work_end_time', ($event.target as HTMLInputElement).value)"
-                />
-              </label>
-            </div>
-            <div v-if="isExpanded(child.id)" class="block-content">
-              <ContentEditor
-                :model-value="child.content"
-                :block-id="child.id"
-                @update:model-value="updateBlockContent(child, $event)"
+            </label>
+            <label>结束
+              <input
+                type="datetime-local"
+                :value="toLocalInput(row.block.work_end_time)"
+                @change="updateBlockTime(row.block, 'work_end_time', ($event.target as HTMLInputElement).value)"
               />
-            </div>
-            <div v-else class="block-summary" title="点击展开" @click="toggleExpand(child.id)">
-              {{ summarize(child) }}
-            </div>
+            </label>
+            <button
+              class="pop-clear"
+              @click="updateBlockTime(row.block, 'work_start_time', ''); updateBlockTime(row.block, 'work_end_time', ''); timePopoverId = null"
+            >清除时间</button>
           </div>
-        </template>
+
+          <!-- 更多菜单 -->
+          <div v-if="moreMenuId === row.block.id" class="row-popover row-more-menu" @mousedown.stop>
+            <button class="menu-item" @click="copyBlock(row.block); moreMenuId = null">⧉ 完整复制（含子块）</button>
+            <button class="menu-item" @click="saveBlockAsTemplate(row.block); moreMenuId = null">▤ 内容存为模板</button>
+            <button class="menu-item danger" @click="moreMenuId = null; deleteBlock(row.block.id)">✕ 删除…</button>
+          </div>
+
+          <!-- 富内容 / 折叠摘要 -->
+          <ContentEditor
+            v-if="isExpanded(row.block.id) && hasContent(row.block)"
+            class="row-rich"
+            :model-value="row.block.content"
+            :block-id="row.block.id"
+            @update:model-value="updateBlockContent(row.block, $event)"
+          />
+          <div
+            v-else-if="!isExpanded(row.block.id)"
+            class="row-summary"
+            title="点击展开"
+            @click="toggleExpand(row.block.id)"
+          >{{ summarize(row.block) }}</div>
+        </div>
       </template>
     </div>
+
+    <!-- 斜杠命令菜单 -->
+    <SlashMenu
+      v-if="slashMenu && slashItems.length"
+      :anchor="slashMenu.anchor"
+      :items="slashItems"
+      :hi="slashHi"
+      @select="onSlashSelect"
+      @hover="slashHi = $event"
+    />
 
     <!-- 删除块确认对话框（FR-08：影响范围展示 + 子块是否一并删除） -->
     <ConfirmDialog
@@ -665,81 +1020,150 @@ async function onDrop(block: Block, e: DragEvent) {
 .editor-header {
   display: flex;
   align-items: center;
-  gap: 16px;
-  padding: 16px 24px;
+  gap: 12px;
+  padding: 10px 24px;
   border-bottom: 1px solid var(--border);
 }
-.editor-header h2 { font-size: 1.2rem; }
-.editor-header .ce-spacer { flex: 1; }
 .save-status { font-size: 0.8rem; color: var(--muted); }
 .save-status.saved { color: #4caf50; }
 .save-status.saving, .save-status.pending { color: var(--accent); }
 .save-status.error { color: var(--danger); }
 .icon-btn:disabled { opacity: 0.4; cursor: default; }
 .icon-btn:disabled:hover { background: transparent; color: var(--muted); }
-.editor-body { padding: 24px; max-width: 800px; margin: 0 auto; }
-.add-block-bar { display: flex; gap: 8px; margin-bottom: 20px; }
-.add-block-bar input { flex: 1; }
-.tpl-select { max-width: 180px; }
-.empty { color: var(--muted); text-align: center; padding: 40px; }
-.block-card {
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  margin-bottom: 12px;
-  padding: 16px;
-  background: var(--bg);
-}
-.block-card[draggable='true'] { cursor: grab; }
-.block-card.sub-block { margin-left: 32px; border-left: 3px solid var(--accent); }
-.block-header { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
-.drag-handle { color: var(--muted); cursor: grab; font-size: 0.8rem; user-select: none; }
-.block-title { border: none; font-weight: 600; font-size: 1rem; flex: 1; background: transparent; min-width: 0; }
-.block-title:focus { border: 1px solid var(--border); }
-.block-time { color: var(--muted); font-size: 0.8rem; white-space: nowrap; }
-.icon-btn {
-  border: none; background: transparent; cursor: pointer;
-  padding: 2px 6px; font-size: 0.8rem; border-radius: 3px;
-  color: var(--muted); white-space: nowrap;
-}
-.icon-btn:hover { background: var(--border); color: var(--text); }
-.icon-btn.danger:hover { color: var(--danger); }
-.block-content { margin-bottom: 8px; }
-.content-area {
+
+/* 居中窄栏文档流 */
+.editor-body { max-width: 720px; margin: 0 auto; padding: 40px 24px 30vh; }
+
+.doc-title {
+  font-size: 28px;
+  font-weight: 700;
+  border: none;
+  outline: none;
+  resize: none;
+  background: transparent;
+  padding: 0 0 4px;
   width: 100%;
-  min-height: 60px;
-  font-family: 'Cascadia Code', Consolas, monospace;
-  font-size: 0.88rem;
-  resize: vertical;
+  overflow: hidden;
+  line-height: 1.4;
+  border-radius: 0;
 }
-.block-actions { margin-top: 8px; }
-.loading { padding: 40px; text-align: center; color: var(--muted); }
+.doc-title:focus { border: none; }
+.doc-title::placeholder { color: #c3c7cf; }
 
-/* 拖拽落点提示 */
-.block-card.drop-before { box-shadow: 0 -3px 0 0 var(--accent); }
-.block-card.drop-after { box-shadow: 0 3px 0 0 var(--accent); }
-.block-card.drop-child { outline: 2px dashed var(--accent); outline-offset: 2px; }
-
-/* 时间轴工具栏（FR-04） */
-.timeline-toolbar {
+/* 工具行 */
+.doc-meta-bar {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
   gap: 8px;
-  margin-bottom: 16px;
-  font-size: 0.85rem;
+  margin: 12px 0 20px;
 }
-.tl-field { color: var(--muted); display: inline-flex; align-items: center; gap: 4px; }
-.tl-btn {
-  border: 1px solid var(--border);
+.seg { display: inline-flex; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
+.seg button {
+  border: none; background: var(--bg); padding: 3px 10px;
+  font-size: 12px; color: var(--muted); border-radius: 0;
+}
+.seg button + button { border-left: 1px solid var(--border); }
+.seg button:hover { color: var(--accent); background: var(--bg); }
+.seg button.on { background: var(--accent-light); color: var(--accent); }
+.seg-toggle {
+  border: 1px solid var(--border); background: var(--bg);
+  padding: 3px 10px; font-size: 12px; color: var(--muted); border-radius: 6px;
+}
+.seg-toggle:hover { color: var(--accent); border-color: var(--accent); }
+.tl-hint { color: var(--muted); margin-left: auto; font-size: 0.75rem; }
+
+/* 任务行 */
+.doc-row { position: relative; padding: 2px 4px 2px 0; border-radius: 6px; }
+.doc-row:hover { background: var(--bg-alt); }
+.doc-row[draggable='true'] { cursor: grab; }
+.doc-row.depth-1 { margin-left: 28px; }
+.doc-row.depth-1::before {
+  content: '';
+  position: absolute;
+  left: -14px;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: var(--border);
+}
+.doc-row.depth-1:hover::before { background: var(--accent); }
+
+.row-main { display: flex; align-items: flex-start; gap: 4px; }
+.row-handle {
+  color: var(--muted); cursor: grab; font-size: 12px;
+  padding: 8px 2px 0; opacity: 0; transition: opacity 0.12s;
+  user-select: none; width: 16px; flex-shrink: 0;
+}
+.doc-row:hover .row-handle { opacity: 1; }
+.row-time {
+  border: none; background: transparent;
+  padding: 6px 6px 0 0; font-size: 12px; color: var(--muted);
+  white-space: nowrap; border-radius: 4px; flex-shrink: 0;
+}
+.row-time:hover { color: var(--accent); }
+.row-time.chip-work { color: var(--accent); }
+.row-time.chip-work::before { content: '● '; font-size: 8px; vertical-align: 2px; }
+.row-input {
+  border: none; outline: none; resize: none; background: transparent;
+  flex: 1; min-width: 0; font-family: inherit; color: var(--fg);
+  font-size: 15px; line-height: 1.6; padding: 4px 2px; overflow: hidden; border-radius: 4px;
+  field-sizing: content;
+}
+.row-input:focus { border: none; }
+.row-input::placeholder { color: #b8bcc4; }
+.row-more {
+  border: none; background: transparent; color: var(--muted);
+  font-size: 14px; padding: 4px 6px; border-radius: 4px;
+  opacity: 0; transition: opacity 0.12s; flex-shrink: 0;
+}
+.doc-row:hover .row-more, .doc-row:focus-within .row-more { opacity: 1; }
+.row-more:hover { background: var(--border); color: var(--fg); }
+
+/* 浮层：时间 popover / 更多菜单 */
+.row-popover {
+  position: absolute;
+  top: calc(100% + 2px);
+  right: 0;
+  z-index: 100;
   background: var(--bg);
-  cursor: pointer;
-  padding: 2px 10px;
-  font-size: 0.8rem;
-  border-radius: 3px;
-  color: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 240px;
 }
-.tl-btn:hover { background: var(--border); color: var(--fg); }
-.tl-hint { color: var(--muted); margin-left: auto; font-size: 0.78rem; }
+.row-popover label { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); }
+.row-popover input[type='datetime-local'] {
+  border: 1px solid var(--border); border-radius: 4px;
+  padding: 2px 4px; font-size: 12px; width: auto; background: var(--bg);
+}
+.pop-clear {
+  border: 1px solid var(--border); background: var(--bg);
+  font-size: 12px; padding: 2px 8px; border-radius: 4px; color: var(--muted); align-self: flex-start;
+}
+.menu-item {
+  display: block; width: 100%; text-align: left; border: none;
+  background: transparent; padding: 6px 10px; font-size: 13px; border-radius: 6px; color: var(--fg);
+}
+.menu-item:hover { background: var(--bg-alt); }
+.menu-item.danger { color: var(--danger); }
+
+/* 富内容与摘要 */
+.row-rich { padding-left: 20px; padding-top: 2px; }
+.row-summary {
+  color: var(--muted);
+  font-size: 0.85rem;
+  cursor: pointer;
+  padding: 4px 2px 4px 20px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.row-summary:hover { color: var(--fg); }
 
 /* 工作时段分组标题 */
 .work-group-title {
@@ -751,45 +1175,19 @@ async function onDrop(block: Block, e: DragEvent) {
 }
 .work-group-title small { color: var(--muted); font-weight: normal; margin-left: 8px; font-size: 0.8rem; }
 
-/* 工作时间编辑行 */
-.block-time-edit {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  margin-bottom: 8px;
-  font-size: 0.8rem;
-  color: var(--muted);
-}
-.block-time-edit label { display: inline-flex; align-items: center; gap: 4px; }
-.block-time-edit input[type='datetime-local'] {
-  border: 1px solid var(--border);
-  border-radius: 3px;
-  padding: 1px 4px;
-  font-size: 0.8rem;
-  color: var(--fg);
-  background: var(--bg);
-}
-
-/* 折叠视图卡片摘要 */
-.block-summary {
-  color: var(--muted);
-  font-size: 0.85rem;
-  cursor: pointer;
-  padding: 4px 2px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.block-summary:hover { color: var(--fg); background: var(--border); border-radius: 3px; }
+/* 拖拽落点提示 */
+.doc-row.drop-before { box-shadow: 0 -3px 0 0 var(--accent); }
+.doc-row.drop-after { box-shadow: 0 3px 0 0 var(--accent); }
+.doc-row.drop-child { outline: 2px dashed var(--accent); outline-offset: 2px; }
 
 /* 块定位高亮（搜索跳转/位置恢复） */
-.block-card.block-highlight {
-  animation: block-flash 2s ease-out;
-}
+.doc-row.block-highlight { animation: block-flash 2s ease-out; }
 @keyframes block-flash {
   0%, 50% { outline: 2px solid var(--accent); outline-offset: 2px; background: var(--accent-light); }
-  100% { outline: none; background: var(--bg); }
+  100% { outline: none; background: transparent; }
 }
+
+.loading { padding: 40px; text-align: center; color: var(--muted); }
 
 /* 删除确认对话框：子块保留选项 */
 .keep-children-option {

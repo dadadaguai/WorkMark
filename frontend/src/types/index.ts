@@ -68,6 +68,16 @@ export interface SearchResult {
   total: number
 }
 
+/** 斜杠菜单项（文档流编辑器） */
+export interface SlashItem {
+  key: string
+  label: string
+  desc: string
+  icon: string
+  type?: ContentBlock['type']
+  tplIndex?: number
+}
+
 /** 内容块（任务块 content JSON 数组的元素） */
 export interface ContentBlock {
   type: 'text' | 'code' | 'shell' | 'output' | 'image' | 'todo' | 'table'

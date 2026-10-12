@@ -38,18 +38,6 @@ const TYPE_LABEL: Record<string, string> = {
   text: '文本', code: '代码', shell: '命令', output: '输出', todo: '待办', table: '表格', image: '图片',
 }
 
-function addBlock(type: ContentBlock['type']) {
-  const base: ContentBlock = { type }
-  if (type === 'text') base.content = ''
-  if (type === 'code') { base.content = ''; base.language = 'python' }
-  if (type === 'shell' || type === 'output') base.content = ''
-  if (type === 'todo') base.items = [{ text: '新待办', done: false }]
-  if (type === 'table') base.rows = [['列1', '列2'], ['', '']]
-  if (type === 'image') base.content = ''
-  items.value.push(base)
-  flush()
-}
-
 function removeItem(i: number) {
   items.value.splice(i, 1)
   flush()
@@ -276,13 +264,6 @@ function lineNumbers(text: string): string {
       </template>
     </div>
 
-    <!-- 添加内容块工具条 -->
-    <div class="ce-add-bar">
-      <button v-for="t in (['text','code','shell','output','todo','table','image'] as const)" :key="t" class="ce-btn" @click="addBlock(t)">
-        + {{ TYPE_LABEL[t] }}
-      </button>
-    </div>
-
     <!-- 图片放大遮罩 -->
     <div v-if="zoomSrc" class="ce-zoom" @click="zoomSrc = null">
       <img :src="zoomSrc" />
@@ -293,11 +274,18 @@ function lineNumbers(text: string): string {
 <style scoped>
 .content-editor { display: flex; flex-direction: column; gap: 8px; }
 .ce-empty { color: var(--muted); font-size: 0.85rem; padding: 8px; }
-.ce-item { border: 1px solid var(--border); border-radius: var(--radius); padding: 8px; background: var(--bg); }
+.ce-item { border: 1px solid var(--border); border-radius: var(--radius); padding: 8px; background: var(--bg); position: relative; }
 .ce-item.ce-shell { border-left: 3px solid #d19a66; }
 .ce-item.ce-output { border-left: 3px solid #89ca78; }
 .ce-item.ce-code { border-left: 3px solid #7aa2f7; }
-.ce-toolbar { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; }
+.ce-toolbar {
+  display: flex; align-items: center; gap: 6px;
+  position: absolute; top: -10px; right: 8px; z-index: 5;
+  background: var(--bg); border: 1px solid var(--border); border-radius: 6px;
+  padding: 2px 4px; box-shadow: var(--shadow);
+  opacity: 0; transition: opacity 0.12s;
+}
+.ce-item:hover .ce-toolbar { opacity: 1; }
 .ce-badge {
   font-size: 0.72rem; padding: 1px 8px; border-radius: 10px;
   background: var(--accent-light); color: var(--accent); font-weight: 600;
@@ -311,7 +299,14 @@ function lineNumbers(text: string): string {
 .ce-btn:hover { background: var(--border); color: var(--text); }
 .ce-btn.danger:hover { color: var(--danger); }
 .ce-btn.on { background: var(--accent-light); color: var(--accent); }
-.ce-mode-bar { display: flex; gap: 4px; margin-bottom: 4px; align-items: center; }
+.ce-mode-bar {
+  display: flex; gap: 4px; align-items: center;
+  position: absolute; top: -10px; left: 8px; z-index: 5;
+  background: var(--bg); border: 1px solid var(--border); border-radius: 6px;
+  padding: 2px 4px; box-shadow: var(--shadow);
+  opacity: 0; transition: opacity 0.12s;
+}
+.ce-item:hover .ce-mode-bar { opacity: 1; }
 .ce-input { border: 1px solid var(--border); border-radius: 3px; padding: 6px 8px; font-size: 0.88rem; background: var(--bg); }
 .ce-textarea { width: 100%; min-height: 70px; resize: vertical; box-sizing: border-box; }
 .mono { font-family: 'Cascadia Code', Consolas, monospace; font-size: 0.84rem; }
@@ -359,7 +354,6 @@ function lineNumbers(text: string): string {
 .ce-table-ops { display: flex; gap: 6px; margin-top: 4px; }
 .ce-image { max-width: 100%; max-height: 300px; cursor: zoom-in; border-radius: 4px; display: block; }
 .ce-image-empty { padding: 8px; color: var(--muted); font-size: 0.85rem; }
-.ce-add-bar { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 4px; }
 .ce-zoom {
   position: fixed; inset: 0; background: rgba(0, 0, 0, 0.75);
   display: flex; align-items: center; justify-content: center; z-index: 1100; cursor: zoom-out;

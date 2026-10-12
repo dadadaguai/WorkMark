@@ -48,17 +48,37 @@ def create_block():
         if parent["document_id"] != document_id:
             return jsonify({"error": "父块不属于该文档"}), 400
 
-    max_order = g.db.execute(
-        "SELECT COALESCE(MAX(sort_order), -1) FROM blocks WHERE document_id = ? AND parent_id IS ?",
-        (document_id, parent_id),
-    ).fetchone()[0]
+    # 可选 after_id：插入到同父级指定块之后（后续兄弟顺延）；不传则追加到末尾
+    after_id = body.get("after_id")
+    if after_id is not None:
+        ref = g.db.execute(
+            "SELECT document_id, parent_id, sort_order FROM blocks WHERE id = ?", (after_id,)
+        ).fetchone()
+        if ref is None:
+            return jsonify({"error": "插入位置块不存在"}), 400
+        if ref["document_id"] != document_id:
+            return jsonify({"error": "插入位置块不属于该文档"}), 400
+        if (ref["parent_id"] or None) != (parent_id or None):
+            return jsonify({"error": "插入位置块与目标父级不一致"}), 400
+        g.db.execute(
+            "UPDATE blocks SET sort_order = sort_order + 1 "
+            "WHERE document_id = ? AND parent_id IS ? AND sort_order > ?",
+            (document_id, parent_id, ref["sort_order"]),
+        )
+        sort_order = ref["sort_order"] + 1
+    else:
+        max_order = g.db.execute(
+            "SELECT COALESCE(MAX(sort_order), -1) FROM blocks WHERE document_id = ? AND parent_id IS ?",
+            (document_id, parent_id),
+        ).fetchone()[0]
+        sort_order = max_order + 1
 
     cursor = g.db.execute(
         """INSERT INTO blocks (document_id, parent_id, title, content, sort_order, work_start_time, work_end_time)
            VALUES (?, ?, ?, ?, ?, ?, ?)""",
         (document_id, parent_id, body.get("title"),
          normalize_content(body.get("content", "[]")) or "[]",
-         max_order + 1, body.get("work_start_time"), body.get("work_end_time")),
+         sort_order, body.get("work_start_time"), body.get("work_end_time")),
     )
     g.db.commit()
     row = g.db.execute("SELECT * FROM blocks WHERE id = ?", (cursor.lastrowid,)).fetchone()

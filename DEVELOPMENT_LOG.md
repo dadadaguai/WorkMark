@@ -42,6 +42,7 @@ cd frontend && npm run dev # 前端 http://localhost:5173
 | 2026-10-10 | feature/attachments | FR-07：附件 API（multipart 上传托管存储 / 引用原始路径）、附件管理页（搜索/类型/大小/引用计数/所属记录跳转/失效警告）、删除引用检查（被引用 409 拒绝）、图片内容块迁移至附件系统（attachment_id 引用，兼容旧 dataURL） | ✅ 已合并 |
 | 2026-10-12 | feature/block-delete-rules | FR-08：块删除确认对话框（影响范围：直接子块/后代子块计数）、删除父块时可选保留子块（keep_children=1 提升为上一级，排序原位插入）、无子块简化确认；文件夹/文档删除确认已在 FR-01 完成 | ✅ 已合并 |
 | 2026-10-12 | feature/inbox | FR-09：收件箱 API（新建/列表/移动/复制/关联/删除）、收件箱页（多行快速输入+Ctrl+Enter、粘贴保真不识别格式、状态标签、选文档对话框、去向跳转）、首页「快速记录」入口 | ✅ 已合并 |
+| 2026-10-12 | feature/doc-flow-editor | 文档流编辑器重构（FR-02 交互升级）：进入文档即可输入（空文档自动创建首块）、每行即任务（主文本存 title，直接输入即建任务）、Enter 光标处拆分/新建（后端 after_id 中间插入，本地重拉保持顺序）、Shift+Enter 软换行、Tab/Shift+Tab 缩进层级（guard：有子块不可缩进）、Backspace 空行删除（有内容/有子块不删）、中文 IME 组合期保护、斜杠命令菜单（7 类内容块+模板）与 ``` 自动代码块、时间 chip（工作时段优先显示，popover 编辑起止时间）、撤销/重做泛化至结构操作（title/content 双字段补丁）、拖拽 child 落点安全降级、ContentEditor 工具栏 hover 化；E2E 17 项合成事件+API 对账验证全部通过 | 🔀 待合并 |
 
 ### 数据库 Schema
 
