@@ -1048,8 +1048,8 @@ async function onDrop(block: Block, e: DragEvent) {
 .save-status.saving, .save-status.pending { color: var(--accent); }
 .save-status.error { color: var(--danger); }
 
-/* 居中窄栏文档流：放宽至约占屏 88%，上限 1200px 保证阅读舒适 */
-.editor-body { max-width: min(1200px, 88vw); margin: 0 auto; padding: 48px 56px 32vh; }
+/* 居中主栏：以 vw 动态占屏，上限 1500px 保证超宽屏阅读舒适 */
+.editor-body { max-width: min(1500px, 93vw); margin: 0 auto; padding: 48px 56px 32vh; }
 
 .doc-title {
   font-family: var(--font-serif);

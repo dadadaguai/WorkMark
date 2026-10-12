@@ -161,7 +161,7 @@ function jumpToBlock(docId: number, blockId: number) {
 </template>
 
 <style scoped>
-.att-page { max-width: min(1180px, 92vw); margin: 0 auto; padding: 20px 32px 48px; }
+.att-page { max-width: min(1400px, 94vw); margin: 0 auto; padding: 20px 32px 48px; }
 .att-header { display: flex; align-items: center; gap: 12px; margin-bottom: 20px; }
 .att-header h2 { font-family: var(--font-serif); font-size: 1.3rem; letter-spacing: 0.03em; }
 .att-spacer { flex: 1; }
