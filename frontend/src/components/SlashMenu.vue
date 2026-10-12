@@ -38,28 +38,43 @@ const style = computed(() => {
 <style scoped>
 .slash-menu {
   position: fixed;
-  width: 264px;
+  width: 272px;
   max-height: 320px;
   overflow: auto;
   z-index: 1000;
   background: var(--bg);
   border: 1px solid var(--border);
-  border-radius: 8px;
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
-  padding: 4px;
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lg);
+  padding: 5px;
+  animation: wm-pop 0.14s ease-out;
 }
 .slash-item {
   display: flex;
-  gap: 8px;
+  gap: 10px;
   align-items: center;
-  padding: 6px 10px;
-  border-radius: 6px;
+  padding: 7px 10px;
+  border-radius: var(--radius);
   font-size: 13px;
   cursor: pointer;
   color: var(--fg);
+  transition: background 0.1s;
 }
-.slash-item.hi { background: var(--bg-alt); }
-.slash-icon { width: 22px; text-align: center; color: var(--muted); font-size: 12px; flex-shrink: 0; }
+.slash-item.hi { background: var(--accent-light); }
+.slash-item.hi .slash-icon { border-color: var(--accent-line); color: var(--accent); background: var(--bg); }
+.slash-icon {
+  width: 24px;
+  height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--muted);
+  font-size: 12px;
+  flex-shrink: 0;
+  transition: color 0.1s, border-color 0.1s, background 0.1s;
+}
 .slash-label { font-weight: 600; white-space: nowrap; }
 .slash-desc { color: var(--muted); font-size: 11px; margin-left: auto; padding-left: 8px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 </style>

@@ -161,40 +161,51 @@ function jumpToBlock(docId: number, blockId: number) {
 </template>
 
 <style scoped>
-.att-page { max-width: 860px; margin: 0 auto; padding: 16px 24px 40px; }
-.att-header { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; }
-.att-header h2 { font-size: 1.2rem; }
+.att-page { max-width: 860px; margin: 0 auto; padding: 20px 28px 48px; }
+.att-header { display: flex; align-items: center; gap: 12px; margin-bottom: 20px; }
+.att-header h2 { font-family: var(--font-serif); font-size: 1.3rem; letter-spacing: 0.03em; }
 .att-spacer { flex: 1; }
 .att-add-btn {
-  display: inline-block; cursor: pointer; padding: 4px 10px;
+  display: inline-block; cursor: pointer; padding: 6px 14px;
   border: 1px solid var(--border); border-radius: var(--radius); font-size: 0.88rem;
+  background: var(--bg);
+  transition: color 0.15s, border-color 0.15s, background 0.15s;
 }
-.att-add-btn:hover { background: var(--accent-light); }
+.att-add-btn:hover { background: var(--accent-light); color: var(--accent); border-color: var(--accent-line); }
 .att-add-btn.disabled { opacity: 0.5; pointer-events: none; }
-.att-toolbar { display: flex; gap: 8px; margin-bottom: 16px; }
+.att-toolbar { display: flex; gap: 8px; margin-bottom: 18px; }
 .att-search { flex: 1; }
-.att-empty { color: var(--muted); text-align: center; padding: 40px; }
+.att-empty { color: var(--muted); text-align: center; padding: 48px; }
 .att-list { list-style: none; }
 .att-item {
   border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: 12px 16px;
-  margin-bottom: 8px;
+  border-radius: var(--radius-lg);
+  padding: 14px 18px;
+  margin-bottom: 10px;
+  background: var(--bg);
+  transition: border-color 0.15s, box-shadow 0.15s;
+  animation: wm-fade-up 0.32s both;
 }
+.att-item:hover { border-color: var(--border-strong); box-shadow: var(--shadow); }
 .att-main { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .att-name { font-weight: 600; cursor: pointer; }
 .att-name:hover { color: var(--accent); text-decoration: underline; }
 .att-broken { color: var(--danger); font-size: 0.82rem; font-weight: 600; }
-.att-meta { color: var(--muted); font-size: 0.82rem; }
-.att-refs { margin-top: 6px; font-size: 0.85rem; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.att-meta {
+  color: var(--muted); font-size: 0.78rem;
+  border: 1px solid var(--border); border-radius: 999px; padding: 0 8px;
+  background: var(--bg-alt);
+  font-variant-numeric: tabular-nums;
+}
+.att-refs { margin-top: 8px; font-size: 0.85rem; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .att-ref-label { color: var(--muted); }
 .att-ref-label.muted { font-style: italic; }
 .att-ref-link {
-  border: none; background: var(--accent-light); color: var(--accent);
-  padding: 2px 8px; border-radius: 10px; cursor: pointer; font-size: 0.8rem;
+  border: 1px solid var(--accent-line); background: var(--accent-light); color: var(--accent);
+  padding: 2px 10px; border-radius: 999px; cursor: pointer; font-size: 0.8rem;
+  transition: background 0.15s;
 }
-.att-ref-link:hover { text-decoration: underline; }
-.att-ops { margin-top: 8px; display: flex; gap: 8px; }
-.att-ops button { padding: 2px 10px; font-size: 0.85rem; }
-.att-ops .danger:hover { color: var(--danger); border-color: var(--danger); }
+.att-ref-link:hover { background: rgba(181, 68, 44, 0.14); text-decoration: none; }
+.att-ops { margin-top: 10px; display: flex; gap: 8px; }
+.att-ops button { padding: 3px 12px; font-size: 0.85rem; }
 </style>

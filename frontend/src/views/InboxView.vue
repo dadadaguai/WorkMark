@@ -176,82 +176,93 @@ function goDocument(docId: number | null, blockId?: number) {
 </template>
 
 <style scoped>
-.inbox-page { max-width: 860px; margin: 0 auto; padding: 16px 24px 40px; }
-.inbox-header { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; }
-.inbox-header h2 { font-size: 1.2rem; }
+.inbox-page { max-width: 860px; margin: 0 auto; padding: 20px 28px 48px; }
+.inbox-header { display: flex; align-items: center; gap: 12px; margin-bottom: 20px; }
+.inbox-header h2 { font-family: var(--font-serif); font-size: 1.3rem; letter-spacing: 0.03em; }
 
 .inbox-compose {
   border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: 12px;
-  margin-bottom: 16px;
+  border-radius: var(--radius-lg);
+  padding: 14px;
+  margin-bottom: 20px;
+  background: var(--bg);
+  box-shadow: var(--shadow);
 }
 .inbox-input {
   width: 100%;
   box-sizing: border-box;
   font-family: inherit;
-  font-size: 0.9rem;
-  line-height: 1.6;
+  font-size: 0.92rem;
+  line-height: 1.7;
   resize: vertical;
   min-height: 80px;
 }
-.compose-ops { display: flex; align-items: center; gap: 12px; margin-top: 8px; }
+.compose-ops { display: flex; align-items: center; gap: 12px; margin-top: 10px; }
 .compose-hint { color: var(--muted); font-size: 0.82rem; flex: 1; }
 
-.inbox-empty { color: var(--muted); text-align: center; padding: 40px; }
+.inbox-empty { color: var(--muted); text-align: center; padding: 48px; }
 .inbox-list { list-style: none; }
 .inbox-item {
   border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: 12px 16px;
-  margin-bottom: 8px;
+  border-radius: var(--radius-lg);
+  padding: 14px 18px;
+  margin-bottom: 10px;
+  background: var(--bg);
+  transition: border-color 0.15s, box-shadow 0.15s;
+  animation: wm-fade-up 0.32s both;
 }
+.inbox-item:hover { border-color: var(--border-strong); box-shadow: var(--shadow); }
 .inbox-item-head { display: flex; align-items: center; gap: 8px; }
 .inbox-spacer { flex: 1; }
 .inbox-status {
-  font-size: 0.78rem;
+  font-size: 0.75rem;
   font-weight: 600;
-  padding: 1px 8px;
-  border-radius: 10px;
+  padding: 1px 9px;
+  border-radius: 999px;
   background: var(--bg-alt);
+  border: 1px solid var(--border);
   color: var(--muted);
+  letter-spacing: 0.04em;
 }
-.inbox-status.pending { background: var(--accent-light); color: var(--accent); }
-.inbox-time { color: var(--muted); font-size: 0.8rem; }
+.inbox-status.pending { background: var(--accent-light); border-color: var(--accent-line); color: var(--accent); }
+.inbox-time { color: var(--muted); font-size: 0.8rem; font-variant-numeric: tabular-nums; }
 .inbox-item-head button { padding: 2px 10px; font-size: 0.85rem; }
-.inbox-item-head .danger:hover { color: var(--danger); border-color: var(--danger); }
 
 .inbox-content {
   margin-top: 8px;
   white-space: pre-wrap;
   word-break: break-word;
   font-size: 0.9rem;
-  line-height: 1.6;
+  line-height: 1.7;
 }
 .inbox-target { margin-top: 8px; font-size: 0.85rem; color: var(--muted); display: flex; align-items: center; gap: 6px; }
 .inbox-doc-link {
-  border: none; background: var(--accent-light); color: var(--accent);
-  padding: 2px 8px; border-radius: 10px; cursor: pointer; font-size: 0.8rem;
+  border: 1px solid var(--accent-line); background: var(--accent-light); color: var(--accent);
+  padding: 2px 10px; border-radius: 999px; cursor: pointer; font-size: 0.8rem;
+  transition: background 0.15s;
 }
-.inbox-doc-link:hover { text-decoration: underline; }
+.inbox-doc-link:hover { background: rgba(181, 68, 44, 0.14); text-decoration: none; }
 
 /* 选文档对话框 */
 .dialog-overlay {
   position: fixed; inset: 0;
-  background: rgba(0, 0, 0, 0.4);
+  background: rgba(35, 39, 43, 0.38);
+  backdrop-filter: blur(2px);
   display: flex; align-items: center; justify-content: center;
   z-index: 1000;
 }
 .dialog {
   background: var(--bg);
-  border-radius: var(--radius);
-  padding: 24px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 26px;
   min-width: 360px;
   max-width: 480px;
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
+  box-shadow: var(--shadow-lg);
+  animation: wm-pop 0.18s ease-out;
 }
-.dialog-title { font-size: 1.1rem; font-weight: 600; margin-bottom: 8px; }
+.dialog-title { font-family: var(--font-serif); font-size: 1.15rem; font-weight: 700; margin-bottom: 8px; }
 .dialog-message { color: var(--muted); margin-bottom: 12px; font-size: 0.9rem; }
-.doc-select { width: 100%; padding: 6px 8px; margin-bottom: 16px; }
+.doc-select { width: 100%; padding: 7px 10px; margin-bottom: 16px; }
 .dialog-actions { display: flex; gap: 8px; justify-content: flex-end; }
 </style>

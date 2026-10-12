@@ -42,28 +42,32 @@ function onCancel() { emit('cancel') }
 <style scoped>
 .dialog-overlay {
   position: fixed; inset: 0;
-  background: rgba(0, 0, 0, 0.4);
+  background: rgba(35, 39, 43, 0.38);
+  backdrop-filter: blur(2px);
   display: flex; align-items: center; justify-content: center;
   z-index: 1000;
 }
 .dialog {
   background: var(--bg);
-  border-radius: var(--radius);
-  padding: 24px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 26px;
   min-width: 360px;
   max-width: 480px;
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
+  box-shadow: var(--shadow-lg);
+  animation: wm-pop 0.18s ease-out;
 }
-.dialog-title { font-size: 1.1rem; font-weight: 600; margin-bottom: 8px; }
+.dialog-title { font-family: var(--font-serif); font-size: 1.15rem; font-weight: 700; margin-bottom: 8px; }
 .dialog-message { color: var(--muted); margin-bottom: 12px; font-size: 0.9rem; }
 .dialog-details { list-style: none; margin-bottom: 16px; }
 .dialog-details li {
   display: flex; justify-content: space-between;
-  padding: 6px 12px; background: var(--bg-alt);
-  border-radius: var(--radius); margin-bottom: 4px; font-size: 0.88rem;
+  padding: 7px 12px; background: var(--bg-alt);
+  border: 1px solid var(--border);
+  border-radius: var(--radius); margin-bottom: 6px; font-size: 0.88rem;
 }
 .detail-label { color: var(--muted); }
-.detail-value { font-weight: 600; }
+.detail-value { font-weight: 600; font-variant-numeric: tabular-nums; }
 .dialog-slot { margin-bottom: 16px; }
 .dialog-actions { display: flex; gap: 8px; justify-content: flex-end; }
 </style>

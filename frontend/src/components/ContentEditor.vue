@@ -272,91 +272,107 @@ function lineNumbers(text: string): string {
 </template>
 
 <style scoped>
-.content-editor { display: flex; flex-direction: column; gap: 8px; }
+.content-editor { display: flex; flex-direction: column; gap: 10px; }
 .ce-empty { color: var(--muted); font-size: 0.85rem; padding: 8px; }
-.ce-item { border: 1px solid var(--border); border-radius: var(--radius); padding: 8px; background: var(--bg); position: relative; }
-.ce-item.ce-shell { border-left: 3px solid #d19a66; }
-.ce-item.ce-output { border-left: 3px solid #89ca78; }
-.ce-item.ce-code { border-left: 3px solid #7aa2f7; }
+.ce-item {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 10px 12px;
+  background: var(--bg);
+  position: relative;
+  box-shadow: 0 1px 2px rgba(35, 39, 43, 0.04);
+}
+.ce-item.ce-shell { border-left: 3px solid var(--warn); }
+.ce-item.ce-output { border-left: 3px solid var(--ok); }
+.ce-item.ce-code { border-left: 3px solid #4a5d8f; }
 .ce-toolbar {
-  display: flex; align-items: center; gap: 6px;
-  position: absolute; top: -10px; right: 8px; z-index: 5;
-  background: var(--bg); border: 1px solid var(--border); border-radius: 6px;
-  padding: 2px 4px; box-shadow: var(--shadow);
-  opacity: 0; transition: opacity 0.12s;
+  display: flex; align-items: center; gap: 4px;
+  position: absolute; top: -11px; right: 10px; z-index: 5;
+  background: var(--bg); border: 1px solid var(--border); border-radius: 999px;
+  padding: 1px 6px; box-shadow: var(--shadow);
+  opacity: 0; transition: opacity 0.15s;
 }
 .ce-item:hover .ce-toolbar { opacity: 1; }
 .ce-badge {
-  font-size: 0.72rem; padding: 1px 8px; border-radius: 10px;
-  background: var(--accent-light); color: var(--accent); font-weight: 600;
+  font-size: 0.7rem; padding: 0 8px; border-radius: 999px;
+  background: var(--bg-alt); color: var(--muted); font-weight: 600;
+  border: 1px solid var(--border);
+  letter-spacing: 0.06em;
 }
-.ce-lang { width: 80px; font-size: 0.8rem; padding: 2px 6px; border: 1px solid var(--border); border-radius: 3px; }
+.ce-lang { width: 80px; font-size: 0.8rem; padding: 2px 6px; border: 1px solid var(--border); border-radius: 4px; }
 .ce-spacer { flex: 1; }
 .ce-btn {
   border: none; background: transparent; cursor: pointer;
-  padding: 2px 8px; font-size: 0.78rem; border-radius: 3px; color: var(--muted);
+  padding: 2px 8px; font-size: 0.78rem; border-radius: 4px; color: var(--muted);
+  transition: background 0.15s, color 0.15s;
 }
-.ce-btn:hover { background: var(--border); color: var(--text); }
+.ce-btn:hover { background: rgba(35, 39, 43, 0.08); color: var(--fg); }
 .ce-btn.danger:hover { color: var(--danger); }
 .ce-btn.on { background: var(--accent-light); color: var(--accent); }
 .ce-mode-bar {
   display: flex; gap: 4px; align-items: center;
-  position: absolute; top: -10px; left: 8px; z-index: 5;
-  background: var(--bg); border: 1px solid var(--border); border-radius: 6px;
-  padding: 2px 4px; box-shadow: var(--shadow);
-  opacity: 0; transition: opacity 0.12s;
+  position: absolute; top: -11px; left: 10px; z-index: 5;
+  background: var(--bg); border: 1px solid var(--border); border-radius: 999px;
+  padding: 1px 6px; box-shadow: var(--shadow);
+  opacity: 0; transition: opacity 0.15s;
 }
 .ce-item:hover .ce-mode-bar { opacity: 1; }
-.ce-input { border: 1px solid var(--border); border-radius: 3px; padding: 6px 8px; font-size: 0.88rem; background: var(--bg); }
+.ce-input { border: 1px solid var(--border); border-radius: var(--radius); padding: 6px 10px; font-size: 0.88rem; background: var(--bg); }
 .ce-textarea { width: 100%; min-height: 70px; resize: vertical; box-sizing: border-box; }
-.mono { font-family: 'Cascadia Code', Consolas, monospace; font-size: 0.84rem; }
-.shell-input { background: #1a1b26; color: #9ece6a; }
+.mono { font-family: var(--font-mono); font-size: 0.84rem; }
+.shell-input { background: #1f232a; color: #9ece6a; }
 .ce-preview-wrap { position: relative; }
 .ce-preview { cursor: text; min-height: 24px; padding: 4px 2px; }
 .ce-placeholder {
-  color: var(--muted); font-size: 0.85rem; cursor: text;
+  color: var(--faint); font-size: 0.85rem; cursor: text;
   padding: 8px 4px; min-height: 24px;
 }
 .ce-preview.collapsed { max-height: 300px; overflow: hidden; }
 .md-render :deep(p) { margin: 4px 0; white-space: pre-wrap; word-break: break-word; }
 .md-render :deep(p.md-gap) { height: 0.5em; }
-.md-render :deep(h2), .md-render :deep(h3), .md-render :deep(h4) { margin: 8px 0 4px; }
+.md-render :deep(h2), .md-render :deep(h3), .md-render :deep(h4) { margin: 10px 0 4px; font-family: var(--font-serif); }
 .md-render :deep(pre.md-pre) {
-  background: var(--bg-alt); padding: 8px; border-radius: 4px; overflow-x: auto;
-  font-family: 'Cascadia Code', Consolas, monospace; font-size: 0.84rem; white-space: pre-wrap;
+  background: var(--bg-alt); border: 1px solid var(--border); padding: 10px 12px; border-radius: var(--radius); overflow-x: auto;
+  font-family: var(--font-mono); font-size: 0.84rem; white-space: pre-wrap;
 }
+.md-render :deep(code) { font-family: var(--font-mono); }
 .md-render :deep(ul), .md-render :deep(ol) { margin: 4px 0; padding-left: 24px; }
 .ce-expand {
   display: block; width: 100%; border: none; border-top: 1px dashed var(--border);
   background: linear-gradient(transparent, var(--bg)); color: var(--accent);
-  cursor: pointer; font-size: 0.78rem; padding: 4px;
+  cursor: pointer; font-size: 0.78rem; padding: 5px;
 }
+.ce-expand:hover { background: var(--accent-light); }
 .ce-code-view {
-  display: flex; background: #1a1b26; color: #c0caf5;
-  border-radius: 4px; overflow: hidden; font-family: 'Cascadia Code', Consolas, monospace;
+  display: flex; background: #1f232a; color: #c8ccd8;
+  border-radius: var(--radius); overflow: hidden; font-family: var(--font-mono);
+  border: 1px solid rgba(35, 39, 43, 0.25);
 }
 .ce-code-view.collapsed { max-height: 300px; }
-.ce-code-view pre { margin: 0; padding: 8px 10px; font-size: 0.84rem; line-height: 1.5; }
-.ce-ln { color: #444a6b; text-align: right; user-select: none; min-width: 36px; }
+.ce-code-view pre { margin: 0; padding: 10px 12px; font-size: 0.84rem; line-height: 1.6; }
+.ce-ln { color: #4d5361; text-align: right; user-select: none; min-width: 36px; border-right: 1px solid rgba(255, 255, 255, 0.06); }
 .ce-code { flex: 1; overflow-x: auto; white-space: pre-wrap; word-break: break-all; }
-.ce-code :deep(.hl-comment) { color: #565f89; font-style: italic; }
+.ce-code :deep(.hl-comment) { color: #5d6575; font-style: italic; }
 .ce-code :deep(.hl-string) { color: #9ece6a; }
 .ce-code :deep(.hl-number) { color: #ff9e64; }
-.ce-code :deep(.hl-keyword) { color: #bb9af7; }
-.ce-todo-row { display: flex; align-items: center; gap: 6px; margin-bottom: 4px; }
+.ce-code :deep(.hl-keyword) { color: #b48ead; }
+.ce-todo-row { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
+.ce-todo-row input[type='checkbox'] { width: auto; accent-color: var(--accent); }
 .ce-todo-text { flex: 1; }
 .ce-todo-text.done { text-decoration: line-through; color: var(--muted); }
 .ce-table { border-collapse: collapse; width: 100%; }
 .ce-table td { border: 1px solid var(--border); padding: 2px; }
 .ce-table tr.head td { background: var(--bg-alt); }
 .ce-cell { border: none; width: 100%; min-width: 80px; font-size: 0.85rem; }
+.ce-cell:focus { box-shadow: none; }
 .ce-row-op { border: none !important; width: 30px; text-align: center; }
-.ce-table-ops { display: flex; gap: 6px; margin-top: 4px; }
-.ce-image { max-width: 100%; max-height: 300px; cursor: zoom-in; border-radius: 4px; display: block; }
+.ce-table-ops { display: flex; gap: 6px; margin-top: 6px; }
+.ce-image { max-width: 100%; max-height: 300px; cursor: zoom-in; border-radius: var(--radius); display: block; border: 1px solid var(--border); }
 .ce-image-empty { padding: 8px; color: var(--muted); font-size: 0.85rem; }
 .ce-zoom {
-  position: fixed; inset: 0; background: rgba(0, 0, 0, 0.75);
+  position: fixed; inset: 0; background: rgba(35, 39, 43, 0.8);
+  backdrop-filter: blur(3px);
   display: flex; align-items: center; justify-content: center; z-index: 1100; cursor: zoom-out;
 }
-.ce-zoom img { max-width: 92vw; max-height: 92vh; border-radius: 4px; }
+.ce-zoom img { max-width: 92vw; max-height: 92vh; border-radius: var(--radius); box-shadow: var(--shadow-lg); }
 </style>
