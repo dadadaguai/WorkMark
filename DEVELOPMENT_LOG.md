@@ -41,6 +41,7 @@ cd frontend && npm run dev # 前端 http://localhost:5173
 | 2026-10-10 | feature/search-context | FR-05：全文搜索 API（LIKE 多关键词 AND，文档名+块标题+内容）、搜索 UI（关键词高亮 mark、文档/块命中分组）、日期浏览（创建/工作开始日期，可与关键词组合）、块命中跳转定位高亮、编辑器停留位置记录（last_position）、首页"继续上次工作"入口 | ✅ 已合并 |
 | 2026-10-10 | feature/attachments | FR-07：附件 API（multipart 上传托管存储 / 引用原始路径）、附件管理页（搜索/类型/大小/引用计数/所属记录跳转/失效警告）、删除引用检查（被引用 409 拒绝）、图片内容块迁移至附件系统（attachment_id 引用，兼容旧 dataURL） | ✅ 已合并 |
 | 2026-10-12 | feature/block-delete-rules | FR-08：块删除确认对话框（影响范围：直接子块/后代子块计数）、删除父块时可选保留子块（keep_children=1 提升为上一级，排序原位插入）、无子块简化确认；文件夹/文档删除确认已在 FR-01 完成 | ✅ 已合并 |
+| 2026-10-12 | feature/inbox | FR-09：收件箱 API（新建/列表/移动/复制/关联/删除）、收件箱页（多行快速输入+Ctrl+Enter、粘贴保真不识别格式、状态标签、选文档对话框、去向跳转）、首页「快速记录」入口 | ✅ 已合并 |
 
 ### 数据库 Schema
 
@@ -78,12 +79,19 @@ cd frontend && npm run dev # 前端 http://localhost:5173
 - [x] GET /api/attachments/:id/file — 获取附件文件内容（send_file；引用失效返回 410）
 - [x] DELETE /api/attachments/:id — 删除附件（被引用返回 409 拒绝；仅托管文件物理删除）
 - [x] DELETE /api/blocks/:id?keep_children=1 — 删除块并保留直接子块（提升到被删块父级、排原位置之后；默认级联删除全部后代）
+- [x] POST /api/inbox — 新建收件箱条目（空内容 400）
+- [x] GET /api/inbox — 收件箱列表（status 过滤，含目标文档名，最新在前）
+- [x] POST /api/inbox/:id/move — 移动到任务文档（内容转为顶层任务块，标记 moved；目标文档不存在 404）
+- [x] POST /api/inbox/:id/copy — 复制到任务文档（同上，条目保留，标记 copied）
+- [x] POST /api/inbox/:id/link — 关联文档保留原记录（标记 linked）
+- [x] DELETE /api/inbox/:id — 删除条目（不影响已移动/复制产生的任务块）
 
 ### 前端页面
 
 - [x] 首页 HomeView：文件夹侧栏、文档列表、新建文档/文件夹
 - [x] 编辑器 EditorView：任务块/子块 CRUD、基础内容编辑、返回首页
 - [x] 附件管理 AttachmentsView：搜索、托管/引用列表、引用计数与所属记录跳转、页面上传/添加引用、删除保护
+- [x] 收件箱 InboxView：快速输入/粘贴、待整理列表、移动/复制/关联整理操作、状态标签与去向跳转
 
 ## 开发中
 
@@ -172,12 +180,12 @@ cd frontend && npm run dev # 前端 http://localhost:5173
 
 ### FR-09: 快速记录 / 收件箱（P0）
 
-- [ ] 收件箱 API
-- [ ] 收件箱页面
-- [ ] 移动到文档
-- [ ] 复制到文档
-- [ ] 关联文档但保留原记录
-- [ ] 合并到已有任务块（P1 可裁剪）
+- [x] 收件箱 API（新建/列表/移动/复制/关联/删除）
+- [x] 收件箱页面（多行 textarea 快速输入 + Ctrl+Enter 提交，粘贴保留换行缩进、不做格式识别）
+- [x] 移动到文档（内容转为顶层任务块，条目标记已移动并显示去向）
+- [x] 复制到文档（同上，条目保留，标记已复制）
+- [x] 关联文档但保留原记录（标记已关联，可跳转目标文档）
+- [ ] 合并到已有任务块（P1 可裁剪，未实现）
 
 ## 后续版本（不纳入 MVP）
 

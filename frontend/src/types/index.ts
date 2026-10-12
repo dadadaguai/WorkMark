@@ -20,6 +20,16 @@ export interface Document {
   updated_at: string
 }
 
+export interface InboxItem {
+  id: number
+  content: string
+  status: 'pending' | 'moved' | 'copied' | 'linked'
+  target_document_id: number | null
+  target_document_name: string | null
+  created_at: string
+  block_id?: number
+}
+
 export interface Block {
   id: number
   document_id: number

@@ -18,6 +18,11 @@ const routes: RouteRecordRaw[] = [
     name: 'attachments',
     component: () => import('@/views/AttachmentsView.vue'),
   },
+  {
+    path: '/inbox',
+    name: 'inbox',
+    component: () => import('@/views/InboxView.vue'),
+  },
 ]
 
 export default createRouter({

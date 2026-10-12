@@ -271,6 +271,7 @@ function continueLastWork() {
   <div class="home">
     <header class="home-header">
       <h1>WorkMark</h1>
+      <button class="att-entry" @click="router.push('/inbox')">快速记录</button>
       <button class="att-entry" @click="router.push('/attachments')">附件管理</button>
       <button v-if="lastDoc" class="last-work-btn" @click="continueLastWork" title="恢复上次停留位置">
         ▸ 继续上次工作：{{ lastDoc.name }}
