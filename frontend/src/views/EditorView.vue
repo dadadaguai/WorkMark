@@ -639,6 +639,49 @@ function insertNewlineAtCursor(row: BlockRow, ta: HTMLTextAreaElement) {
   focusRow(row.block.id, pos + 1)
 }
 
+/** 在当前块之后新建同级空任务块并聚焦（富内容下方的"新建任务"入口）。 */
+async function addBlockAfter(block: Block) {
+  try {
+    const nb = await api.post<Block>('/blocks', {
+      document_id: Number(props.id),
+      parent_id: block.parent_id,
+      after_id: block.id,
+      title: '',
+      content: '[]',
+    })
+    await reloadBlocks()
+    focusRow(nb.id, 'start')
+  } catch {
+    const nb = await api.post<Block>('/blocks', {
+      document_id: Number(props.id),
+      parent_id: block.parent_id,
+      title: '',
+      content: '[]',
+    })
+    blocks.value.push(nb)
+    focusRow(nb.id, 'start')
+  }
+}
+
+/** 为当前块新建一个子块（parent_id = 当前块）并聚焦。 */
+async function addChildBlock(block: Block) {
+  if (block.parent_id !== null) return // 仅顶层块可作为父
+  try {
+    const nb = await api.post<Block>('/blocks', {
+      document_id: Number(props.id),
+      parent_id: block.id,
+      title: '',
+      content: '[]',
+    })
+    await reloadBlocks()
+    if (!expandedIds.value.has(block.id)) toggleExpand(block.id)
+    focusRow(nb.id, 'start')
+  } catch {
+    // 后端可能要求父块无子块时才能建子块，回退为同级
+    await addBlockAfter(block)
+  }
+}
+
 /** Tab：顶层块变为前一个顶层兄弟的子块（排其子块末尾）。 */
 async function indentBlock(row: BlockRow) {
   const block = row.block
@@ -916,6 +959,12 @@ async function onDrop(block: Block, e: DragEvent) {
           <div class="row-main">
             <span v-if="sortMode === 'doc'" class="row-handle" title="拖拽排序">⠿</span>
             <button
+              v-if="sortMode === 'doc' && row.depth === 0"
+              class="row-add-child"
+              title="添加子块（Tab）"
+              @click.stop="addChildBlock(row.block)"
+            >＋</button>
+            <button
               class="row-time"
               :class="timeChip(row.block).cls"
               :title="timeChip(row.block).tip"
@@ -982,6 +1031,13 @@ async function onDrop(block: Block, e: DragEvent) {
             title="点击展开"
             @click="toggleExpand(row.block.id)"
           >{{ summarize(row.block) }}</div>
+
+          <!-- 富内容下方：新建任务入口（解决插入内容块后无法继续输入的问题） -->
+          <button
+            v-if="hasContent(row.block) && isExpanded(row.block.id)"
+            class="row-add-after"
+            @click.stop="addBlockAfter(row.block)"
+          >＋ 在此后新建任务</button>
         </div>
       </template>
     </div>
@@ -1134,6 +1190,25 @@ async function onDrop(block: Block, e: DragEvent) {
 }
 .doc-row:hover .row-handle { opacity: 1; }
 .row-handle:hover { color: var(--accent); }
+.row-add-child {
+  border: none;
+  background: transparent;
+  color: var(--faint);
+  font-size: 14px;
+  width: 16px;
+  height: 22px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+  opacity: 0;
+  transition: opacity 0.15s, color 0.15s, background 0.15s;
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+.doc-row:hover .row-add-child { opacity: 1; }
+.row-add-child:hover { color: var(--accent); background: var(--accent-light); }
 
 /* 时间 chip：小楷标签，hairline 边框 + 等宽数字 */
 .row-time {
@@ -1211,8 +1286,8 @@ async function onDrop(block: Block, e: DragEvent) {
 .menu-item.danger { color: var(--danger); }
 .menu-item.danger:hover { background: rgba(163, 51, 39, 0.08); color: var(--danger); }
 
-/* 富内容与摘要 */
-.row-rich { padding-left: 24px; padding-top: 4px; }
+/* 富内容与摘要：顶部留白容纳内容块浮动工具栏 */
+.row-rich { padding-left: 24px; padding-top: 18px; overflow: visible; }
 .row-summary {
   color: var(--muted);
   font-size: 0.85rem;
@@ -1224,6 +1299,25 @@ async function onDrop(block: Block, e: DragEvent) {
   transition: color 0.15s;
 }
 .row-summary:hover { color: var(--accent); }
+
+/* 富内容下方：新建任务入口 */
+.row-add-after {
+  display: block;
+  margin: 8px 0 0 24px;
+  border: 1px dashed var(--border);
+  background: transparent;
+  color: var(--muted);
+  font-size: 0.82rem;
+  padding: 5px 14px;
+  border-radius: var(--radius);
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s, background 0.15s;
+}
+.row-add-after:hover {
+  color: var(--accent);
+  border-color: var(--accent-line);
+  background: var(--accent-light);
+}
 
 /* 工作时段分组标题：楷体 + 朱砂标记 */
 .work-group-title {
