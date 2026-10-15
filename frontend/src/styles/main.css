@@ -1,37 +1,38 @@
 /* ─────────────────────────────────────────────
-   WorkMark ·「工作台稿纸」设计令牌
-   暖纸白底 + 墨色文字 + 朱砂点睛 + 精致 hairline
+   WorkMark ·「干净文档」设计令牌（对齐飞书/语雀）
+   纯白画布 + 中性灰 chrome + 朱砂点睛（品牌延续）
    ───────────────────────────────────────────── */
 :root {
-  /* 纸面与卡片 */
-  --bg: #fffdf9;            /* 卡片/浮层白 */
-  --paper: #f6f4ef;         /* 页面纸底 */
-  --bg-alt: #f1ede3;        /* 悬停/浅分区 */
+  /* 画布与卡片 */
+  --bg: #ffffff;             /* 卡片/浮层白 */
+  --paper: #ffffff;          /* 页面画布（保持白净，如飞书文档） */
+  --bg-alt: #f4f4f2;         /* 悬停/浅分区（暖调中性灰） */
+  --bg-hover: rgba(35, 39, 43, 0.04);
   /* 墨色 */
-  --fg: #23272b;
-  --text: var(--fg);        /* 兼容旧引用 */
-  --muted: #6b6f66;
-  --faint: #a8a599;         /* 占位符等更弱一级 */
+  --fg: #26282c;
+  --text: var(--fg);         /* 兼容旧引用 */
+  --muted: #6b7076;
+  --faint: #a6aaaf;          /* 占位符等更弱一级 */
   /* hairline 边框 */
-  --border: rgba(35, 39, 43, 0.12);
-  --border-strong: rgba(35, 39, 43, 0.22);
-  /* 点睛朱砂 */
+  --border: rgba(38, 40, 44, 0.11);
+  --border-strong: rgba(38, 40, 44, 0.22);
+  /* 点睛朱砂（品牌色，克制使用） */
   --accent: #b5442c;
   --accent-deep: #9d3a24;
   --accent-light: rgba(181, 68, 44, 0.08);
   --accent-line: rgba(181, 68, 44, 0.35);
   /* 语义色 */
-  --danger: #a33327;
-  --ok: #3d6b4f;
+  --danger: #c5322b;
+  --ok: #2e7d51;
   --warn: #b07916;
   /* 形态 */
   --radius: 6px;
   --radius-lg: 10px;
-  --shadow: 0 1px 2px rgba(35, 39, 43, 0.06), 0 2px 8px rgba(35, 39, 43, 0.06);
-  --shadow-lg: 0 8px 32px rgba(35, 39, 43, 0.14), 0 2px 8px rgba(35, 39, 43, 0.08);
-  /* 字体 */
-  --font-body: "Microsoft YaHei", "PingFang SC", "Segoe UI", system-ui, sans-serif;
-  --font-serif: "Kaiti SC", "STKaiti", KaiTi, "楷体", Georgia, serif;
+  --shadow: 0 1px 2px rgba(38, 40, 44, 0.05), 0 2px 8px rgba(38, 40, 44, 0.05);
+  --shadow-lg: 0 12px 32px rgba(38, 40, 44, 0.12), 0 2px 8px rgba(38, 40, 44, 0.06);
+  /* 字体（正文/标题统一无衬线，如飞书） */
+  --font-body: "PingFang SC", "Microsoft YaHei", "Segoe UI", system-ui, sans-serif;
+  --font-serif: var(--font-body); /* 兼容旧引用：一律无衬线 */
   --font-mono: "Cascadia Code", Consolas, "Courier New", monospace;
 }
 
@@ -50,30 +51,18 @@ body {
   line-height: 1.7;
 }
 
-/* 纸纹理：细颗粒叠层，营造稿纸质感（不动布局，不拦事件） */
-body::before {
-  content: '';
-  position: fixed;
-  inset: 0;
-  z-index: 3000;
-  pointer-events: none;
-  opacity: 0.05;
-  mix-blend-mode: multiply;
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.5'/%3E%3C/svg%3E");
-}
-
-::selection { background: rgba(181, 68, 44, 0.18); }
+::selection { background: rgba(181, 68, 44, 0.16); }
 
 /* 滚动条：细而克制 */
 ::-webkit-scrollbar { width: 10px; height: 10px; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb {
-  background: rgba(35, 39, 43, 0.16);
+  background: rgba(38, 40, 44, 0.16);
   border-radius: 5px;
   border: 2px solid transparent;
   background-clip: content-box;
 }
-::-webkit-scrollbar-thumb:hover { background-color: rgba(35, 39, 43, 0.3); }
+::-webkit-scrollbar-thumb:hover { background-color: rgba(38, 40, 44, 0.3); }
 
 :focus-visible {
   outline: 2px solid var(--accent-line);
@@ -94,38 +83,33 @@ button {
 }
 
 button:hover {
-  border-color: var(--accent-line);
-  color: var(--accent);
-  background: var(--accent-light);
+  border-color: var(--border-strong);
+  background: var(--bg-alt);
 }
-
-button:active { transform: translateY(0.5px); }
 
 button.primary {
   background: var(--accent);
-  color: #fdf8f3;
+  color: #fff;
   border-color: var(--accent);
-  box-shadow: 0 1px 3px rgba(157, 58, 36, 0.35);
 }
-
 button.primary:hover {
   background: var(--accent-deep);
   border-color: var(--accent-deep);
-  color: #fdf8f3;
+  color: #fff;
 }
 
 button.primary:disabled { opacity: 0.5; cursor: default; transform: none; }
 button:disabled { cursor: default; }
 
-button.danger { color: var(--danger); border-color: rgba(163, 51, 39, 0.4); }
+button.danger { color: var(--danger); border-color: rgba(197, 50, 43, 0.4); }
 
 button.danger:hover {
-  color: #fdf8f3;
+  color: #fff;
   background: var(--danger);
   border-color: var(--danger);
 }
 
-/* ── 输入：卡片白 + hairline + 聚焦朱砂细环 ── */
+/* ── 输入：hairline + 聚焦朱砂细环 ── */
 input, textarea, select {
   font-family: inherit;
   font-size: 0.9rem;
@@ -141,7 +125,7 @@ input, textarea, select {
 
 input:focus, textarea:focus, select:focus {
   border-color: var(--accent-line);
-  box-shadow: 0 0 0 3px rgba(181, 68, 44, 0.1);
+  box-shadow: 0 0 0 3px rgba(181, 68, 44, 0.08);
 }
 
 input::placeholder, textarea::placeholder { color: var(--faint); }
@@ -153,13 +137,13 @@ a {
 
 a:hover { text-decoration: underline; }
 
-/* 通用入场动效 */
+/* 通用动效 */
 @keyframes wm-fade-up {
-  from { opacity: 0; transform: translateY(6px); }
+  from { opacity: 0; transform: translateY(4px); }
   to { opacity: 1; transform: none; }
 }
 
 @keyframes wm-pop {
-  from { opacity: 0; transform: scale(0.97) translateY(4px); }
+  from { opacity: 0; transform: scale(0.98) translateY(3px); }
   to { opacity: 1; transform: none; }
 }

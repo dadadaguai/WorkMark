@@ -1,6 +1,7 @@
 <script setup lang="ts">
 /** 块内容编辑器：渲染并编辑 ContentBlock[]（text/code/shell/output/todo/table/image）。
  * v-model 传 JSON 字符串（block.content），任何修改立即 emit 保存。
+ * 交互对齐飞书/语雀：一体化块头部栏（非浮动胶囊，杜绝裁切）；文本块展示态无边框段落化。
  */
 import { ref, watch } from 'vue'
 import { renderMarkdown } from '@/utils/markdown'
@@ -152,25 +153,15 @@ function lineNumbers(text: string): string {
   <div class="content-editor">
     <div v-if="items.length === 0" class="ce-empty">空内容块，从下方添加。</div>
 
-    <div v-for="(item, i) in items" :key="i" class="ce-item" :class="`ce-${item.type}`">
-      <div class="ce-toolbar">
-        <span class="ce-badge">{{ TYPE_LABEL[item.type] || item.type }}</span>
-        <input
-          v-if="item.type === 'code'"
-          v-model="item.language"
-          class="ce-lang"
-          placeholder="语言"
-          @change="flush"
-        />
-        <span class="ce-spacer"></span>
-        <button class="ce-btn" title="上移" @click="moveItem(i, -1)">↑</button>
-        <button class="ce-btn" title="下移" @click="moveItem(i, 1)">↓</button>
-        <button class="ce-btn danger" title="删除" @click="removeItem(i)">✕</button>
-      </div>
-
-      <!-- 文本：预览 ⇄ 编辑 -->
+    <div
+      v-for="(item, i) in items"
+      :key="i"
+      class="ce-item"
+      :class="[`ce-${item.type}`, { 'ce-plain': item.type === 'text' && modeOf(i, 'view') === 'view' }]"
+    >
+      <!-- ── 文本块：展示态无边框段落（如飞书文本块），点击进入编辑 ── -->
       <template v-if="item.type === 'text'">
-        <div v-if="modeOf(i, 'view') === 'view'" class="ce-preview-wrap">
+        <div v-if="modeOf(i, 'view') === 'view'" class="ce-text-view">
           <div
             v-if="item.content"
             class="ce-preview md-render"
@@ -179,27 +170,49 @@ function lineNumbers(text: string): string {
             @click="setMode(i, 'edit')"
           ></div>
           <div v-else class="ce-placeholder" @click="setMode(i, 'edit')">（空，点击输入文本，支持 Markdown）</div>
-          <button v-if="!expanded[i]" class="ce-expand" @click="expanded[i] = true">展开</button>
-          <button v-else class="ce-expand" @click="expanded[i] = false">收起</button>
+          <!-- hover 悬浮操作（在块内部，不外溢不裁切） -->
+          <div class="ce-text-ops" @mousedown.prevent>
+            <button class="ce-op" :title="copied[i] ? '已复制' : '复制'" @click="copyText(i, item.content || '')">⧉</button>
+            <button class="ce-op" title="上移" @click="moveItem(i, -1)">↑</button>
+            <button class="ce-op" title="下移" @click="moveItem(i, 1)">↓</button>
+            <button class="ce-op danger" title="删除" @click="removeItem(i)">✕</button>
+          </div>
+          <button v-if="item.content && !expanded[i]" class="ce-expand" @click="expanded[i] = true">展开 ▾</button>
+          <button v-else-if="item.content" class="ce-expand" @click="expanded[i] = false">收起 ▴</button>
         </div>
-        <textarea
-          v-else
-          v-model="item.content"
-          v-focus
-          class="ce-input ce-textarea"
-          placeholder="输入文本，支持 Markdown（# 标题、**粗体**、`代码`、- 列表）..."
-          @input="flush"
-          @blur="flush(); setMode(i, 'view')"
-        ></textarea>
+        <div v-else class="ce-text-edit">
+          <textarea
+            v-model="item.content"
+            v-focus
+            class="ce-input ce-textarea"
+            placeholder="输入文本，支持 Markdown（# 标题、**粗体**、`代码`、- 列表）..."
+            @input="flush"
+            @blur="flush(); setMode(i, 'view')"
+          ></textarea>
+          <div class="ce-edit-hint">失焦自动切回预览 · 支持 Markdown</div>
+        </div>
       </template>
 
-      <!-- 代码 / 命令 / 输出 -->
+      <!-- ── 代码 / 命令 / 输出：一体化头部栏 + 主体 ── -->
       <template v-else-if="item.type === 'code' || item.type === 'shell' || item.type === 'output'">
-        <div class="ce-mode-bar">
-          <button class="ce-btn" :class="{ on: modeOf(i, 'edit') === 'edit' }" @click="setMode(i, 'edit')">编辑</button>
-          <button class="ce-btn" :class="{ on: modeOf(i, 'view') === 'view' }" @click="setMode(i, 'view')">预览</button>
+        <div class="ce-head">
+          <span class="ce-type" :class="'ce-type-' + item.type"><span class="ce-dot"></span>{{ TYPE_LABEL[item.type] }}</span>
+          <input
+            v-if="item.type === 'code'"
+            v-model="item.language"
+            class="ce-lang"
+            placeholder="语言"
+            @change="flush"
+          />
           <span class="ce-spacer"></span>
-          <button class="ce-btn" @click="copyText(i, item.content || '')">{{ copied[i] ? '已复制' : '复制' }}</button>
+          <div class="ce-seg">
+            <button class="ce-op" :class="{ on: modeOf(i, 'edit') === 'edit' }" @click="setMode(i, 'edit')">编辑</button>
+            <button class="ce-op" :class="{ on: modeOf(i, 'view') === 'view' }" @click="setMode(i, 'view')">预览</button>
+          </div>
+          <button class="ce-op copy-btn" @click="copyText(i, item.content || '')">{{ copied[i] ? '已复制 ✓' : '复制' }}</button>
+          <button class="ce-op" title="上移" @click="moveItem(i, -1)">↑</button>
+          <button class="ce-op" title="下移" @click="moveItem(i, 1)">↓</button>
+          <button class="ce-op danger" title="删除" @click="removeItem(i)">✕</button>
         </div>
         <textarea
           v-if="modeOf(i, 'edit') === 'edit'"
@@ -215,51 +228,79 @@ function lineNumbers(text: string): string {
             <pre class="ce-ln">{{ lineNumbers(item.content || '') }}</pre>
             <pre class="ce-code" v-html="highlight(item.content || '', item.language)"></pre>
           </div>
-          <button v-if="!expanded[i]" class="ce-expand" @click="expanded[i] = true">展开</button>
-          <button v-else class="ce-expand" @click="expanded[i] = false">收起</button>
+          <button v-if="!expanded[i]" class="ce-expand" @click="expanded[i] = true">展开 ▾</button>
+          <button v-else class="ce-expand" @click="expanded[i] = false">收起 ▴</button>
         </div>
       </template>
 
-      <!-- 待办清单 -->
+      <!-- ── 待办清单 ── -->
       <template v-else-if="item.type === 'todo'">
-        <div v-for="(t, ti) in item.items" :key="ti" class="ce-todo-row">
-          <input v-model="t.done" type="checkbox" @change="flush" />
-          <input v-model="t.text" class="ce-input ce-todo-text" :class="{ done: t.done }" placeholder="待办内容..." @change="flush" />
-          <button class="ce-btn danger" @click="item.items?.splice(ti, 1); flush()">✕</button>
+        <div class="ce-head">
+          <span class="ce-type ce-type-todo"><span class="ce-dot"></span>待办</span>
+          <span class="ce-spacer"></span>
+          <button class="ce-op" title="上移" @click="moveItem(i, -1)">↑</button>
+          <button class="ce-op" title="下移" @click="moveItem(i, 1)">↓</button>
+          <button class="ce-op danger" title="删除" @click="removeItem(i)">✕</button>
         </div>
-        <button class="ce-btn" @click="addTodo(item)">+ 添加待办</button>
-      </template>
-
-      <!-- 表格 -->
-      <template v-else-if="item.type === 'table'">
-        <table class="ce-table">
-          <tbody>
-            <tr v-for="(row, ri) in item.rows" :key="ri" :class="{ head: ri === 0 }">
-              <td v-for="(_, ci) in row" :key="ci">
-                <input v-model="row[ci]" class="ce-input ce-cell" @change="flush" />
-              </td>
-              <td class="ce-row-op"><button class="ce-btn danger" title="删行" @click="removeRow(item, ri)">✕</button></td>
-            </tr>
-          </tbody>
-        </table>
-        <div class="ce-table-ops">
-          <button class="ce-btn" @click="addRow(item)">+ 行</button>
-          <button class="ce-btn" @click="addCol(item)">+ 列</button>
-        </div>
-      </template>
-
-      <!-- 图片 -->
-      <template v-else-if="item.type === 'image'">
-        <template v-if="imageUrl(item)">
-          <img :src="imageUrl(item)!" class="ce-image" @click="zoomSrc = imageUrl(item)" title="点击放大" />
-          <div class="ce-mode-bar">
-            <span v-if="imageUploading">上传中…</span>
-            <input type="file" accept="image/*" :disabled="imageUploading" @change="onImagePick(item, $event)" />
+        <div class="ce-body">
+          <div v-for="(t, ti) in item.items" :key="ti" class="ce-todo-row">
+            <input v-model="t.done" type="checkbox" @change="flush" />
+            <input v-model="t.text" class="ce-input ce-todo-text" :class="{ done: t.done }" placeholder="待办内容..." @change="flush" />
+            <button class="ce-op danger ce-todo-del" title="删除此项" @click="item.items?.splice(ti, 1); flush()">✕</button>
           </div>
-        </template>
-        <div v-else class="ce-image-empty">
-          <span v-if="imageUploading">上传中…</span>
-          <input v-else type="file" accept="image/*" @change="onImagePick(item, $event)" />
+          <button class="ce-add" @click="addTodo(item)">＋ 添加待办</button>
+        </div>
+      </template>
+
+      <!-- ── 表格 ── -->
+      <template v-else-if="item.type === 'table'">
+        <div class="ce-head">
+          <span class="ce-type ce-type-table"><span class="ce-dot"></span>表格</span>
+          <span class="ce-spacer"></span>
+          <button class="ce-op" title="上移" @click="moveItem(i, -1)">↑</button>
+          <button class="ce-op" title="下移" @click="moveItem(i, 1)">↓</button>
+          <button class="ce-op danger" title="删除" @click="removeItem(i)">✕</button>
+        </div>
+        <div class="ce-body">
+          <table class="ce-table">
+            <tbody>
+              <tr v-for="(row, ri) in item.rows" :key="ri" :class="{ head: ri === 0 }">
+                <td v-for="(_, ci) in row" :key="ci">
+                  <input v-model="row[ci]" class="ce-input ce-cell" @change="flush" />
+                </td>
+                <td class="ce-row-op"><button class="ce-op danger" title="删行" @click="removeRow(item, ri)">✕</button></td>
+              </tr>
+            </tbody>
+          </table>
+          <div class="ce-table-ops">
+            <button class="ce-add" @click="addRow(item)">＋ 行</button>
+            <button class="ce-add" @click="addCol(item)">＋ 列</button>
+          </div>
+        </div>
+      </template>
+
+      <!-- ── 图片 ── -->
+      <template v-else-if="item.type === 'image'">
+        <div class="ce-head">
+          <span class="ce-type ce-type-image"><span class="ce-dot"></span>图片</span>
+          <span class="ce-spacer"></span>
+          <button class="ce-op" title="上移" @click="moveItem(i, -1)">↑</button>
+          <button class="ce-op" title="下移" @click="moveItem(i, 1)">↓</button>
+          <button class="ce-op danger" title="删除" @click="removeItem(i)">✕</button>
+        </div>
+        <div class="ce-body ce-image-body">
+          <template v-if="imageUrl(item)">
+            <img :src="imageUrl(item)!" class="ce-image" @click="zoomSrc = imageUrl(item)" title="点击放大" />
+            <label class="ce-replace" :class="{ disabled: imageUploading }">
+              {{ imageUploading ? '上传中…' : '更换图片' }}
+              <input type="file" accept="image/*" :disabled="imageUploading" @change="onImagePick(item, $event)" />
+            </label>
+          </template>
+          <label v-else class="ce-upload" :class="{ disabled: imageUploading }">
+            <span class="ce-upload-icon">🖼</span>
+            <span>{{ imageUploading ? '上传中…' : '点击上传图片' }}</span>
+            <input type="file" accept="image/*" :disabled="imageUploading" @change="onImagePick(item, $event)" />
+          </label>
         </div>
       </template>
     </div>
@@ -274,79 +315,170 @@ function lineNumbers(text: string): string {
 <style scoped>
 .content-editor { display: flex; flex-direction: column; gap: 10px; }
 .ce-empty { color: var(--muted); font-size: 0.85rem; padding: 8px; }
+
+/* ── 块容器：卡片式 + 一体化头部栏（无浮动元素，彻底告别裁切）── */
 .ce-item {
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
-  padding: 10px 12px;
   background: var(--bg);
-  position: relative;
-  box-shadow: 0 1px 2px rgba(35, 39, 43, 0.04);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }
-.ce-item.ce-shell { border-left: 3px solid var(--warn); }
-.ce-item.ce-output { border-left: 3px solid var(--ok); }
-.ce-item.ce-code { border-left: 3px solid #4a5d8f; }
-.ce-toolbar {
-  display: flex; align-items: center; gap: 4px;
-  position: absolute; top: -11px; right: 10px; z-index: 5;
-  background: var(--bg); border: 1px solid var(--border); border-radius: 999px;
-  padding: 1px 6px; box-shadow: var(--shadow);
-  opacity: 0; transition: opacity 0.15s;
+
+/* ── 头部栏：类型标识 + 语言 + 操作（飞书代码块式）── */
+.ce-head {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px;
+  min-height: 34px;
+  border-bottom: 1px solid var(--border);
+  background: rgba(38, 40, 44, 0.025);
 }
-.ce-item:hover .ce-toolbar { opacity: 1; }
-.ce-badge {
-  font-size: 0.7rem; padding: 0 8px; border-radius: 999px;
-  background: var(--bg-alt); color: var(--muted); font-weight: 600;
-  border: 1px solid var(--border);
-  letter-spacing: 0.06em;
+.ce-type {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+  letter-spacing: 0.04em;
 }
-.ce-lang { width: 80px; font-size: 0.8rem; padding: 2px 6px; border: 1px solid var(--border); border-radius: 4px; }
+.ce-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
+.ce-type-text .ce-dot { background: #8a8f98; }
+.ce-type-code .ce-dot { background: #4a5d8f; }
+.ce-type-shell .ce-dot { background: #b07916; }
+.ce-type-output .ce-dot { background: #2e7d51; }
+.ce-type-todo .ce-dot { background: #3a6fd8; }
+.ce-type-table .ce-dot { background: #8f6db4; }
+.ce-type-image .ce-dot { background: #2e8b77; }
+.ce-lang {
+  width: 76px;
+  font-size: 12px;
+  padding: 2px 6px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--muted);
+}
+.ce-lang:hover { border-color: var(--border); }
+.ce-lang:focus { border-color: var(--accent-line); box-shadow: none; }
 .ce-spacer { flex: 1; }
-.ce-btn {
-  border: none; background: transparent; cursor: pointer;
-  padding: 2px 8px; font-size: 0.78rem; border-radius: 4px; color: var(--muted);
+
+/* 幽灵操作按钮 */
+.ce-op {
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  padding: 3px 8px;
+  font-size: 12px;
+  border-radius: 4px;
+  color: var(--muted);
+  flex-shrink: 0;
   transition: background 0.15s, color 0.15s;
 }
-.ce-btn:hover { background: rgba(35, 39, 43, 0.08); color: var(--fg); }
-.ce-btn.danger:hover { color: var(--danger); }
-.ce-btn.on { background: var(--accent-light); color: var(--accent); }
-.ce-mode-bar {
-  display: flex; gap: 4px; align-items: center;
-  position: absolute; top: -11px; left: 10px; z-index: 5;
-  background: var(--bg); border: 1px solid var(--border); border-radius: 999px;
-  padding: 1px 6px; box-shadow: var(--shadow);
-  opacity: 0; transition: opacity 0.15s;
+.ce-op:hover { background: rgba(38, 40, 44, 0.07); color: var(--fg); }
+.ce-op.danger:hover { background: rgba(197, 50, 43, 0.09); color: var(--danger); }
+
+/* 编辑/预览迷你分段 */
+.ce-seg {
+  display: inline-flex;
+  gap: 2px;
+  background: rgba(38, 40, 44, 0.06);
+  border-radius: 6px;
+  padding: 2px;
 }
-.ce-item:hover .ce-mode-bar { opacity: 1; }
-.ce-input { border: 1px solid var(--border); border-radius: var(--radius); padding: 6px 10px; font-size: 0.88rem; background: var(--bg); }
+.ce-seg .ce-op { padding: 2px 10px; border-radius: 4px; }
+.ce-seg .ce-op.on { background: #fff; color: var(--fg); box-shadow: 0 1px 2px rgba(38, 40, 44, 0.1); }
+.copy-btn { white-space: nowrap; }
+
+/* ── 输入区 ── */
+.ce-input {
+  border: none;
+  border-radius: 0;
+  padding: 10px 12px;
+  font-size: 0.88rem;
+  background: var(--bg);
+  width: 100%;
+}
+.ce-input:focus { box-shadow: none; }
 .ce-textarea { width: 100%; min-height: 70px; resize: vertical; box-sizing: border-box; }
 .mono { font-family: var(--font-mono); font-size: 0.84rem; }
 .shell-input { background: #1f232a; color: #9ece6a; }
-.ce-preview-wrap { position: relative; }
-.ce-preview { cursor: text; min-height: 24px; padding: 4px 2px; }
+
+/* ── 文本块：展示态完全无边框（段落式），hover 轻灰 ── */
+.ce-item.ce-plain { border: none; background: transparent; }
+.ce-text-view { position: relative; border-radius: var(--radius); }
+.ce-text-view:hover { background: var(--bg-hover); }
+.ce-preview { cursor: text; min-height: 24px; padding: 4px 8px; border-radius: var(--radius); }
 .ce-placeholder {
   color: var(--faint); font-size: 0.85rem; cursor: text;
-  padding: 8px 4px; min-height: 24px;
+  padding: 8px 8px; min-height: 24px; border-radius: var(--radius);
 }
 .ce-preview.collapsed { max-height: 300px; overflow: hidden; }
+
+/* 文本块 hover 悬浮操作：块内部右上角，不外溢 */
+.ce-text-ops {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  display: inline-flex;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 1px 2px;
+  box-shadow: var(--shadow);
+  opacity: 0;
+  transition: opacity 0.15s;
+  z-index: 2;
+}
+.ce-text-view:hover .ce-text-ops { opacity: 1; }
+.ce-text-ops .ce-op { padding: 2px 7px; }
+
+/* 文本块编辑态：朱砂细环聚焦框 */
+.ce-text-edit {
+  border: 1px solid var(--accent-line);
+  border-radius: var(--radius-lg);
+  background: var(--bg);
+  box-shadow: 0 0 0 3px rgba(181, 68, 44, 0.06);
+  overflow: hidden;
+}
+.ce-edit-hint { font-size: 11px; color: var(--faint); padding: 0 12px 8px; }
+
+/* Markdown 渲染 */
 .md-render :deep(p) { margin: 4px 0; white-space: pre-wrap; word-break: break-word; }
 .md-render :deep(p.md-gap) { height: 0.5em; }
-.md-render :deep(h2), .md-render :deep(h3), .md-render :deep(h4) { margin: 10px 0 4px; font-family: var(--font-serif); }
+.md-render :deep(h2), .md-render :deep(h3), .md-render :deep(h4) { margin: 10px 0 4px; }
 .md-render :deep(pre.md-pre) {
   background: var(--bg-alt); border: 1px solid var(--border); padding: 10px 12px; border-radius: var(--radius); overflow-x: auto;
   font-family: var(--font-mono); font-size: 0.84rem; white-space: pre-wrap;
 }
 .md-render :deep(code) { font-family: var(--font-mono); }
 .md-render :deep(ul), .md-render :deep(ol) { margin: 4px 0; padding-left: 24px; }
+
+/* 展开/收起：幽灵分隔线按钮 */
 .ce-expand {
-  display: block; width: 100%; border: none; border-top: 1px dashed var(--border);
-  background: linear-gradient(transparent, var(--bg)); color: var(--accent);
-  cursor: pointer; font-size: 0.78rem; padding: 5px;
+  display: block;
+  width: 100%;
+  border: none;
+  border-top: 1px dashed var(--border);
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 0.78rem;
+  padding: 4px;
 }
-.ce-expand:hover { background: var(--accent-light); }
+.ce-expand:hover { color: var(--fg); background: var(--bg-hover); }
+.ce-plain .ce-expand { border: none; width: auto; align-self: center; font-size: 11px; color: var(--faint); padding: 2px 10px; }
+.ce-plain .ce-expand:hover { color: var(--accent); background: var(--accent-light); }
+
+/* ── 代码预览：深色 + 行号 ── */
+.ce-preview-wrap { position: relative; }
 .ce-code-view {
   display: flex; background: #1f232a; color: #c8ccd8;
-  border-radius: var(--radius); overflow: hidden; font-family: var(--font-mono);
-  border: 1px solid rgba(35, 39, 43, 0.25);
+  font-family: var(--font-mono);
+  overflow: hidden auto;
 }
 .ce-code-view.collapsed { max-height: 300px; }
 .ce-code-view pre { margin: 0; padding: 10px 12px; font-size: 0.84rem; line-height: 1.6; }
@@ -356,21 +488,76 @@ function lineNumbers(text: string): string {
 .ce-code :deep(.hl-string) { color: #9ece6a; }
 .ce-code :deep(.hl-number) { color: #ff9e64; }
 .ce-code :deep(.hl-keyword) { color: #b48ead; }
-.ce-todo-row { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
+
+/* ── 主体留白容器（todo/表格/图片）── */
+.ce-body { padding: 8px 12px; display: flex; flex-direction: column; gap: 6px; }
+
+/* 待办 */
+.ce-todo-row { display: flex; align-items: center; gap: 8px; }
 .ce-todo-row input[type='checkbox'] { width: auto; accent-color: var(--accent); }
-.ce-todo-text { flex: 1; }
+.ce-todo-text { flex: 1; padding: 4px 8px; }
 .ce-todo-text.done { text-decoration: line-through; color: var(--muted); }
+.ce-todo-del { opacity: 0; transition: opacity 0.15s; }
+.ce-todo-row:hover .ce-todo-del { opacity: 1; }
+.ce-add {
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  font-size: 12px;
+  padding: 3px 8px;
+  border-radius: 4px;
+  width: fit-content;
+  cursor: pointer;
+}
+.ce-add:hover { color: var(--accent); background: var(--accent-light); }
+
+/* 表格 */
 .ce-table { border-collapse: collapse; width: 100%; }
 .ce-table td { border: 1px solid var(--border); padding: 2px; }
 .ce-table tr.head td { background: var(--bg-alt); }
-.ce-cell { border: none; width: 100%; min-width: 80px; font-size: 0.85rem; }
+.ce-cell { border: none; width: 100%; min-width: 80px; font-size: 0.85rem; padding: 4px 8px; }
 .ce-cell:focus { box-shadow: none; }
 .ce-row-op { border: none !important; width: 30px; text-align: center; }
-.ce-table-ops { display: flex; gap: 6px; margin-top: 6px; }
+.ce-table-ops { display: flex; gap: 6px; }
+
+/* 图片 */
+.ce-image-body { align-items: flex-start; }
 .ce-image { max-width: 100%; max-height: 300px; cursor: zoom-in; border-radius: var(--radius); display: block; border: 1px solid var(--border); }
-.ce-image-empty { padding: 8px; color: var(--muted); font-size: 0.85rem; }
+.ce-replace {
+  display: inline-flex;
+  align-items: center;
+  font-size: 12px;
+  color: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 3px 12px;
+  cursor: pointer;
+  margin-top: 6px;
+  width: fit-content;
+}
+.ce-replace:hover { color: var(--fg); border-color: var(--border-strong); background: var(--bg-alt); }
+.ce-replace.disabled { opacity: 0.5; cursor: default; }
+.ce-replace input, .ce-upload input { display: none; }
+.ce-upload {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 22px;
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-lg);
+  color: var(--muted);
+  font-size: 0.85rem;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+}
+.ce-upload:hover { border-color: var(--accent-line); background: var(--accent-light); color: var(--accent); }
+.ce-upload.disabled { opacity: 0.5; cursor: default; }
+.ce-upload-icon { font-size: 22px; }
+
+/* 图片放大遮罩 */
 .ce-zoom {
-  position: fixed; inset: 0; background: rgba(35, 39, 43, 0.8);
+  position: fixed; inset: 0; background: rgba(38, 40, 44, 0.8);
   backdrop-filter: blur(3px);
   display: flex; align-items: center; justify-content: center; z-index: 1100; cursor: zoom-out;
 }

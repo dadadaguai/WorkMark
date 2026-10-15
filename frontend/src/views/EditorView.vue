@@ -988,17 +988,11 @@ async function onDrop(block: Block, e: DragEvent) {
               title="添加子块（Tab）"
               @click.stop="addChildBlock(row.block)"
             >＋</button>
-            <button
-              class="row-time"
-              :class="timeChip(row.block).cls"
-              :title="timeChip(row.block).tip"
-              @click.stop="toggleTimePopover(row.block.id)"
-            >{{ timeChip(row.block).text }}</button>
             <textarea
               class="row-input"
               rows="1"
               :value="row.block.title ?? ''"
-              placeholder="输入任务，回车新建；输入 / 插入内容"
+              placeholder="输入任务，'/' 插入内容"
               @input="onRowInput(row, $event)"
               @keydown="onRowKeydown(row, $event)"
               @blur="flushSaves()"
@@ -1009,6 +1003,12 @@ async function onDrop(block: Block, e: DragEvent) {
               :title="isExpanded(row.block.id) ? '收起' : '展开'"
               @click.stop="toggleExpand(row.block.id)"
             >{{ isExpanded(row.block.id) ? '⊟' : '⊞' }}</button>
+            <button
+              class="row-time"
+              :class="timeChip(row.block).cls"
+              :title="timeChip(row.block).tip"
+              @click.stop="toggleTimePopover(row.block.id)"
+            >{{ timeChip(row.block).text }}</button>
             <button class="row-more" title="更多操作" @click.stop="toggleMoreMenu(row.block.id)">⋯</button>
           </div>
 
@@ -1099,14 +1099,15 @@ async function onDrop(block: Block, e: DragEvent) {
 <style scoped>
 .editor { min-height: 100vh; }
 
-/* 顶栏：纸面 sticky + hairline */
+/* 顶栏：白底 sticky + hairline，右侧操作 */
 .editor-header {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 10px 24px;
+  padding: 8px 24px;
   border-bottom: 1px solid var(--border);
-  background: var(--bg);
+  background: rgba(255, 255, 255, 0.92);
+  backdrop-filter: blur(8px);
   position: sticky;
   top: 0;
   z-index: 50;
@@ -1119,9 +1120,9 @@ async function onDrop(block: Block, e: DragEvent) {
   border-radius: var(--radius);
   font-size: 0.85rem;
 }
-.icon-btn:hover { border-color: var(--border); color: var(--fg); background: var(--bg-alt); }
+.icon-btn:hover { border-color: transparent; color: var(--fg); background: var(--bg-alt); }
 .icon-btn:disabled { opacity: 0.35; cursor: default; }
-.icon-btn:disabled:hover { background: transparent; color: var(--muted); border-color: transparent; }
+.icon-btn:disabled:hover { background: transparent; color: var(--muted); }
 .ce-spacer { flex: 1; }
 .save-status { font-size: 0.78rem; color: var(--muted); font-variant-numeric: tabular-nums; }
 .save-status.saved { color: var(--ok); }
@@ -1132,10 +1133,9 @@ async function onDrop(block: Block, e: DragEvent) {
 .editor-body { max-width: min(1500px, 93vw); margin: 0 auto; padding: 48px 56px 32vh; }
 
 .doc-title {
-  font-family: var(--font-serif);
-  font-size: 32px;
-  font-weight: 700;
-  letter-spacing: 0.02em;
+  font-size: 34px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
   border: none;
   outline: none;
   resize: none;
@@ -1147,79 +1147,76 @@ async function onDrop(block: Block, e: DragEvent) {
   border-radius: 0;
 }
 .doc-title:focus { border: none; box-shadow: none; }
-.doc-title::placeholder { color: #cfc9bb; }
+.doc-title::placeholder { color: #c9cdd1; }
 
-/* 工具行 */
+/* 工具行：右对齐静音（如飞书，不在文档左上压一排控件） */
 .doc-meta-bar {
   display: flex;
   align-items: center;
+  justify-content: flex-end;
   flex-wrap: wrap;
   gap: 8px;
-  margin: 14px 0 26px;
-  padding-bottom: 16px;
-  border-bottom: 1px solid var(--border);
+  margin: 4px 0 20px;
 }
-.seg { display: inline-flex; border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; background: var(--bg); }
+.seg { display: inline-flex; border-radius: var(--radius); overflow: hidden; background: transparent; }
 .seg button {
   border: none; background: transparent; padding: 4px 12px;
-  font-size: 12px; color: var(--muted); border-radius: 0;
+  font-size: 12px; color: var(--muted); border-radius: var(--radius);
 }
-.seg button + button { border-left: 1px solid var(--border); }
-.seg button:hover { color: var(--accent); background: var(--accent-light); }
-.seg button.on { background: var(--accent-light); color: var(--accent); font-weight: 600; }
+.seg button + button { border-left: none; }
+.seg button:hover { color: var(--fg); background: var(--bg-alt); }
+.seg button.on { background: var(--bg-alt); color: var(--fg); font-weight: 600; }
 .seg-toggle {
-  border: 1px solid var(--border); background: var(--bg);
+  border: none; background: transparent;
   padding: 4px 12px; font-size: 12px; color: var(--muted); border-radius: var(--radius);
 }
-.seg-toggle:hover { color: var(--accent); border-color: var(--accent-line); background: var(--accent-light); }
-.tl-hint { color: var(--muted); margin-left: auto; font-size: 0.75rem; }
+.seg-toggle:hover { color: var(--fg); background: var(--bg-alt); }
+.tl-hint { color: var(--faint); margin-left: auto; font-size: 0.75rem; }
 
-/* 任务行：稿纸行，hover 微暖，聚焦行左侧朱砂批注线 */
+/* 任务行：干净行式布局（飞书块式），hover 轻灰、聚焦更轻 */
 .doc-row {
   position: relative;
   padding: 2px 8px 2px 4px;
   border-radius: var(--radius);
-  animation: wm-fade-up 0.32s both;
+  animation: wm-fade-up 0.24s both;
 }
-.doc-row:nth-child(2) { animation-delay: 0.02s; }
-.doc-row:nth-child(3) { animation-delay: 0.04s; }
-.doc-row:nth-child(4) { animation-delay: 0.06s; }
-.doc-row:nth-child(5) { animation-delay: 0.08s; }
-.doc-row:nth-child(6) { animation-delay: 0.1s; }
-.doc-row:nth-child(7) { animation-delay: 0.12s; }
-.doc-row:nth-child(8) { animation-delay: 0.14s; }
-.doc-row:hover { background: rgba(35, 39, 43, 0.035); }
-.doc-row:focus-within {
-  background: rgba(181, 68, 44, 0.04);
-  box-shadow: inset 2px 0 0 var(--accent);
-}
+.doc-row:nth-child(2) { animation-delay: 0.01s; }
+.doc-row:nth-child(3) { animation-delay: 0.02s; }
+.doc-row:nth-child(4) { animation-delay: 0.03s; }
+.doc-row:nth-child(5) { animation-delay: 0.04s; }
+.doc-row:nth-child(6) { animation-delay: 0.05s; }
+.doc-row:nth-child(7) { animation-delay: 0.06s; }
+.doc-row:nth-child(8) { animation-delay: 0.07s; }
+.doc-row:hover { background: var(--bg-hover); }
+.doc-row:focus-within { background: rgba(38, 40, 44, 0.025); }
 .doc-row[draggable='true'] { cursor: grab; }
-.doc-row.depth-1 { margin-left: 30px; }
+.doc-row.depth-1 { margin-left: 22px; }
 .doc-row.depth-1::before {
   content: '';
   position: absolute;
-  left: -15px;
+  left: -11px;
   top: 2px;
   bottom: 2px;
-  width: 1px;
+  width: 2px;
+  border-radius: 1px;
   background: var(--border-strong);
 }
 .doc-row.depth-1:hover::before { background: var(--accent-line); }
 
 .row-main { display: flex; align-items: flex-start; gap: 6px; }
 .row-handle {
-  color: var(--faint); cursor: grab; font-size: 12px;
-  padding: 9px 2px 0; opacity: 0; transition: opacity 0.15s, color 0.15s;
-  user-select: none; width: 16px; flex-shrink: 0;
+  color: var(--faint); cursor: grab; font-size: 13px;
+  padding: 8px 1px 0; opacity: 0; transition: opacity 0.15s, color 0.15s;
+  user-select: none; width: 18px; flex-shrink: 0;
 }
-.doc-row:hover .row-handle { opacity: 1; }
-.row-handle:hover { color: var(--accent); }
+.doc-row:hover .row-handle { opacity: 0.8; }
+.row-handle:hover { color: var(--accent); opacity: 1; }
 .row-add-child {
   border: none;
   background: transparent;
   color: var(--faint);
   font-size: 14px;
-  width: 16px;
+  width: 18px;
   height: 22px;
   padding: 0;
   display: inline-flex;
@@ -1229,35 +1226,11 @@ async function onDrop(block: Block, e: DragEvent) {
   opacity: 0;
   transition: opacity 0.15s, color 0.15s, background 0.15s;
   flex-shrink: 0;
-  margin-top: 2px;
+  margin-top: 3px;
 }
 .doc-row:hover .row-add-child { opacity: 1; }
 .row-add-child:hover { color: var(--accent); background: var(--accent-light); }
 
-/* 时间 chip：小楷标签，hairline 边框 + 等宽数字 */
-.row-time {
-  border: 1px solid var(--border);
-  background: var(--bg);
-  padding: 1px 7px;
-  margin-top: 4px;
-  font-size: 11px;
-  line-height: 1.6;
-  color: var(--muted);
-  border-radius: 4px;
-  white-space: nowrap;
-  flex-shrink: 0;
-  font-variant-numeric: tabular-nums;
-  letter-spacing: 0.02em;
-  transition: color 0.15s, border-color 0.15s, background 0.15s;
-}
-.row-time:hover { border-color: var(--accent-line); color: var(--accent); background: var(--accent-light); }
-.row-time.chip-work {
-  color: var(--accent);
-  border-color: var(--accent-line);
-  background: var(--accent-light);
-  font-weight: 600;
-}
-.row-time.chip-work::before { content: '●'; font-size: 6px; margin-right: 4px; vertical-align: 2px; }
 .row-input {
   border: none; outline: none; resize: none; background: transparent;
   flex: 1; min-width: 0; font-family: inherit; color: var(--fg);
@@ -1265,7 +1238,32 @@ async function onDrop(block: Block, e: DragEvent) {
   field-sizing: content;
 }
 .row-input:focus { border: none; box-shadow: none; }
-.row-input::placeholder { color: #c8c3b5; }
+.row-input::placeholder { color: #c9cdd1; }
+
+/* 时间 chip：行尾弱化元信息，hover 才浮出（不再挤占输入区） */
+.row-time {
+  border: 1px solid transparent;
+  background: transparent;
+  padding: 2px 6px;
+  margin-top: 5px;
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--faint);
+  border-radius: 4px;
+  white-space: nowrap;
+  flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.02em;
+  opacity: 0;
+  transition: opacity 0.15s, color 0.15s, border-color 0.15s, background 0.15s;
+}
+.doc-row:hover .row-time, .doc-row:focus-within .row-time { opacity: 1; }
+.row-time:hover { border-color: var(--border); color: var(--fg); background: var(--bg-alt); }
+.row-time.chip-work {
+  color: var(--accent);
+  opacity: 1;
+}
+.row-time.chip-work::before { content: '●'; font-size: 6px; margin-right: 4px; vertical-align: 2px; }
 .row-more {
   border: none; background: transparent; color: var(--muted);
   font-size: 14px; padding: 4px 6px; border-radius: 4px;
@@ -1310,13 +1308,13 @@ async function onDrop(block: Block, e: DragEvent) {
 .menu-item.danger { color: var(--danger); }
 .menu-item.danger:hover { background: rgba(163, 51, 39, 0.08); color: var(--danger); }
 
-/* 富内容与摘要：顶部留白容纳内容块浮动工具栏 */
-.row-rich { padding-left: 24px; padding-top: 18px; overflow: visible; }
+/* 富内容与摘要：与任务文本左对齐（内容块已改一体化头部栏，无需大留白） */
+.row-rich { padding-left: 50px; padding-top: 4px; overflow: visible; }
 .row-summary {
   color: var(--muted);
   font-size: 0.85rem;
   cursor: pointer;
-  padding: 4px 2px 4px 24px;
+  padding: 4px 2px 4px 50px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1324,31 +1322,30 @@ async function onDrop(block: Block, e: DragEvent) {
 }
 .row-summary:hover { color: var(--accent); }
 
-/* 富内容下方：新建任务入口 */
+/* 富内容下方：新建任务入口（hover 浮现，静音处理） */
 .row-add-after {
   display: block;
-  margin: 8px 0 0 24px;
-  border: 1px dashed var(--border);
+  margin: 2px 0 0 50px;
+  border: none;
   background: transparent;
-  color: var(--muted);
+  color: var(--faint);
   font-size: 0.82rem;
-  padding: 5px 14px;
+  padding: 4px 10px;
   border-radius: var(--radius);
   cursor: pointer;
-  transition: color 0.15s, border-color 0.15s, background 0.15s;
+  width: fit-content;
+  opacity: 0;
+  transition: opacity 0.15s, color 0.15s, background 0.15s;
 }
-.row-add-after:hover {
-  color: var(--accent);
-  border-color: var(--accent-line);
-  background: var(--accent-light);
-}
+.doc-row:hover .row-add-after, .doc-row:focus-within .row-add-after { opacity: 1; }
+.row-add-after:hover { color: var(--accent); background: var(--accent-light); }
 
-/* 工作时段分组标题：楷体 + 朱砂标记 */
+/* 工作时段分组标题 */
 .work-group-title {
-  font-family: var(--font-serif);
-  font-size: 1.05rem;
+  font-size: 0.95rem;
+  font-weight: 600;
   color: var(--fg);
-  margin: 28px 0 12px;
+  margin: 28px 0 10px;
   padding-bottom: 6px;
   border-bottom: 1px solid var(--border);
   display: flex;
@@ -1357,15 +1354,15 @@ async function onDrop(block: Block, e: DragEvent) {
 }
 .work-group-title::before {
   content: '';
-  width: 8px;
-  height: 8px;
+  width: 3px;
+  height: 14px;
   background: var(--accent);
   border-radius: 2px;
   align-self: center;
   flex-shrink: 0;
 }
 .work-group-title small {
-  color: var(--muted);
+  color: var(--faint);
   font-weight: normal;
   margin-left: auto;
   font-size: 0.75rem;
