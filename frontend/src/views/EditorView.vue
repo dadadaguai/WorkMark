@@ -544,7 +544,7 @@ function focusRow(blockId: number, pos: 'start' | 'end' | number = 'end') {
 }
 
 // ── 行输入：标题更新 + 斜杠菜单触发 + ``` 检测 ──
-const slashMenu = ref<{ blockId: number; slashPos: number; anchor: DOMRect } | null>(null)
+const slashMenu = ref<{ blockId: number; slashPos: number; pos: number; anchor: DOMRect } | null>(null)
 const slashHi = ref(0)
 
 function closeSlash() { slashMenu.value = null }
@@ -562,11 +562,12 @@ const slashItems = computed<SlashItem[]>(() => {
   templates.value.forEach((t, i) =>
     base.push({ key: 'tpl-' + i, label: t.name, desc: '插入模板内容', icon: '▤', tplIndex: i }),
   )
-  // 按 '/' 后输入的文字过滤（匹配 key / label / desc，不区分大小写），回车即选中匹配项
+  // 按 '/' 后输入的文字过滤（查询词到空白为止——中间插入时后文不粘在命令上；
+  // 匹配 key / label / desc，不区分大小写），回车即选中匹配项
   const m = slashMenu.value
   if (m) {
     const block = blocks.value.find(b => b.id === m.blockId)
-    const query = (block?.title ?? '').slice(m.slashPos + 1).trim().toLowerCase()
+    const query = ((block?.title ?? '').slice(m.slashPos + 1).match(/^\S+/)?.[0] ?? '').toLowerCase()
     if (query) {
       return base.filter(it =>
         it.key.toLowerCase().includes(query) ||
@@ -592,26 +593,28 @@ function onRowInput(row: BlockRow, e: Event) {
   applyTitle(block.id, now)
   autoResize(ta)
 
-  // ``` 单独成行 → 转为代码内容块
-  if (now.trim() === '```') {
-    recordBlockChange(block.id, 'title', now, '')
-    applyTitle(block.id, '')
+  // ``` 出现在光标处 → 光标前正文留在任务行，代码块插在中间（光标处插入）
+  if (/```\s*$/.test(now)) {
+    const head = now.replace(/```\s*$/, '')
+    recordBlockChange(block.id, 'title', now, head)
+    applyTitle(block.id, head)
     appendContentBlocks(block.id, [{ type: 'code', content: '', language: 'python' }])
     closeSlash()
-    // 同任务内追加空文本块续写文字（ContentEditor 检测到后自动进入编辑态聚焦）
+    // 代码块下接续写区（ContentEditor 检测到后自动进入编辑态聚焦）
     appendContentBlocks(block.id, [makeDefaultContent('text')])
     return
   }
 
-  // 斜杠菜单打开中：光标退回 slashPos 之前或 '/' 被删 → 关闭
+  // 斜杠菜单打开中：光标退回 slashPos 之前或 '/' 被删 → 关闭；否则记录光标（选中时消费 '/命令' 到此处）
   if (slashMenu.value && slashMenu.value.blockId === block.id) {
     if (pos <= slashMenu.value.slashPos || now[slashMenu.value.slashPos] !== '/') closeSlash()
+    else slashMenu.value.pos = pos
   }
   // 触发斜杠菜单：行首或空白后输入 '/'
   if (!slashMenu.value || slashMenu.value.blockId !== block.id) {
     const prev = now[pos - 1]
     if (prev === '/' && (pos === 1 || /\s/.test(now[pos - 2] ?? ' '))) {
-      slashMenu.value = { blockId: block.id, slashPos: pos - 1, anchor: ta.getBoundingClientRect() }
+      slashMenu.value = { blockId: block.id, slashPos: pos - 1, pos, anchor: ta.getBoundingClientRect() }
       slashHi.value = 0
     }
   }
@@ -624,18 +627,20 @@ function onSlashSelect(item: SlashItem) {
   const block = blocks.value.find(b => b.id === m.blockId)
   if (!block) return
   const text = block.title ?? ''
-  const clean = text.slice(0, m.slashPos) + text.slice(m.slashPos + 1) // 移除 '/'
-  recordBlockChange(block.id, 'title', text, clean)
-  applyTitle(block.id, clean)
-  if (item.tplIndex !== undefined) {
-    try {
-      appendContentBlocks(block.id, JSON.parse(templates.value[item.tplIndex].content) as ContentBlock[])
-    } catch { /* 模板内容损坏时忽略 */ }
-  } else if (item.type) {
-    appendContentBlocks(block.id, [makeDefaultContent(item.type)])
-  }
-  // 插入后同任务内追加空文本块续写（排版与任务输入行一致，回车新建下一行任务）
-  appendContentBlocks(block.id, [makeDefaultContent('text')])
+  // 消费 '/查询词'（查询词到空白为止；光标提前则只消费到光标），后文完整保留
+  const q = text.slice(m.slashPos + 1).match(/^\S+/)?.[0] ?? ''
+  const cutEnd = Math.min(m.pos, m.slashPos + 1 + q.length)
+  const head = text.slice(0, m.slashPos) // 光标（'/'）前正文：留在任务行
+  const tail = text.slice(cutEnd)        // 命令后正文：移到插入块下方，形成连续文档流
+  recordBlockChange(block.id, 'title', text, head)
+  applyTitle(block.id, head)
+  const inserted: ContentBlock[] = item.tplIndex !== undefined
+    ? (() => { try { return JSON.parse(templates.value[item.tplIndex!].content) as ContentBlock[] } catch { return [] } })()
+    : item.type && item.type !== 'text'
+      ? [makeDefaultContent(item.type)]
+      : []
+  // 光标处插入：插入块 + 后文文本块（空=续写区；ContentEditor 检测到后自动聚焦、光标落块首）
+  appendContentBlocks(block.id, [...inserted, { type: 'text', content: tail }])
 }
 
 // ── 行键盘行为 ──

@@ -92,10 +92,11 @@ function onTextEnter(e: KeyboardEvent) {
   emit('enter')
 }
 
-// 斜杠插入后追加的空文本块 → 自动进入编辑态并聚焦（v-focus 在 v-if 渲染 textarea 时聚焦）
+// 光标处插入后追加的文本块（空=续写区；非空=斜杠后的后文）→ 自动进入编辑态，
+// 光标落块首（即用户敲 '/' 时的原光标位置），实现连续文档流
 watch(() => items.value.length, (n, old) => {
   const last = items.value[n - 1]
-  if (n > (old ?? 0) && last?.type === 'text' && !last.content) {
+  if (n > (old ?? 0) && last?.type === 'text') {
     nextTick(() => setMode(n - 1, 'edit'))
   }
 })
