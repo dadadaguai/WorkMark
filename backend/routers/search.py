@@ -42,6 +42,20 @@ def _content_digest(content: str, terms: list[str], max_len: int = 120) -> str:
     return (text[:max_len].replace("\n", " ")) or "（无文本内容）"
 
 
+def _title_digest(title: str, terms: list[str], max_len: int = 120) -> str:
+    """text 行正文摘要：优先返回首个关键词命中片段，否则取开头。"""
+    text = " ¶ ".join(ln.strip() for ln in title.splitlines() if ln.strip())
+    low = text.lower()
+    if terms:
+        for t in terms:
+            idx = low.find(t.lower())
+            if idx != -1:
+                start = max(0, idx - 30)
+                frag = text[start:start + max_len]
+                return ("…" if start > 0 else "") + frag
+    return text[:max_len] or "（空）"
+
+
 def _match_all(haystacks: list, terms: list[str]) -> bool:
     """所有关键词至少命中任一字段（大小写无关）。"""
     lowers = [str(h).lower() for h in haystacks if h]
@@ -78,15 +92,18 @@ def search():
     for r in rows:
         if terms and not _match_all([r["title"], r["content"]], terms):
             continue
+        # text 行正文在 title；content 行摘要从 content JSON 提取
+        digest = _content_digest(r["content"], terms) if r["content"] not in (None, "", "[]") \
+            else _title_digest(r["title"] or "", terms)
         results.append({
             "block_id": r["id"],
             "document_id": r["document_id"],
             "document_name": doc_names.get(r["document_id"], ""),
-            "block_title": r["title"] or "无标题",
+            "block_title": (r["title"] or "").splitlines()[0][:60] if r["title"] else "内容块",
             "is_sub": r["parent_id"] is not None,
             "created_at": r["created_at"],
             "work_start_time": r["work_start_time"],
-            "digest": _content_digest(r["content"], terms),
+            "digest": digest,
         })
         if len(results) >= 100:
             break

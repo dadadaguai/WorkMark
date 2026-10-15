@@ -1,117 +1,51 @@
 <script setup lang="ts">
-/** 块内容编辑器：渲染并编辑 ContentBlock[]（text/code/shell/output/todo/table/image）。
- * v-model 传 JSON 字符串（block.content），任何修改立即 emit 保存。
- * 交互对齐飞书/语雀：一体化块头部栏（非浮动胶囊，杜绝裁切）；文本块展示态无边框段落化。
+/** 内容块编辑器（单块模式）：渲染并编辑 content 行的唯一 ContentBlock。
+ * v-model 传 JSON 字符串（'[{item}]'），任何修改立即 emit 保存。
+ * 块的删除/移动/复制由行级 ⋯ 菜单负责，块内只保留编辑相关操作。
  */
-import { ref, watch, nextTick } from 'vue'
-import { renderMarkdown } from '@/utils/markdown'
+import { ref, watch } from 'vue'
 import { highlight } from '@/utils/highlight'
 import { api } from '@/composables/useApi'
 import type { ContentBlock } from '@/types'
 
 const props = defineProps<{ modelValue: string; blockId?: number }>()
-const emit = defineEmits<{ 'update:modelValue': [string]; enter: [] }>()
+const emit = defineEmits<{ 'update:modelValue': [string] }>()
 
-const items = ref<ContentBlock[]>(parse(props.modelValue))
+const item = ref<ContentBlock>(parse(props.modelValue))
 
-function parse(s: string): ContentBlock[] {
+function parse(s: string): ContentBlock {
   try {
     const arr = JSON.parse(s || '[]')
-    return Array.isArray(arr) ? arr : []
+    return Array.isArray(arr) && arr[0] ? arr[0] : { type: 'code', content: '' }
   } catch {
-    return []
+    return { type: 'code', content: '' }
   }
 }
 
 function flush() {
-  emit('update:modelValue', JSON.stringify(items.value))
+  emit('update:modelValue', JSON.stringify([item.value]))
 }
 
 watch(
   () => props.modelValue,
   v => {
-    if (v !== JSON.stringify(items.value)) items.value = parse(v)
+    if (v !== JSON.stringify([item.value])) item.value = parse(v)
   },
 )
 
-// ── 内容块增删移动 ──
-const TYPE_LABEL: Record<string, string> = {
-  text: '文本', code: '代码', shell: '命令', output: '输出', todo: '待办', table: '表格', image: '图片',
-}
-
-function removeItem(i: number) {
-  items.value.splice(i, 1)
-  flush()
-}
-
-function moveItem(i: number, dir: -1 | 1) {
-  const j = i + dir
-  if (j < 0 || j >= items.value.length) return
-  const [it] = items.value.splice(i, 1)
-  items.value.splice(j, 0, it)
-  flush()
-}
-
-// ── 编辑/预览状态（code/shell/output 双态；text 点击预览进入编辑）──
-const mode = ref<Record<number, 'edit' | 'view'>>({})
-
-function modeOf(i: number, def: 'edit' | 'view') {
-  return mode.value[i] ?? def
-}
-
-function setMode(i: number, m: 'edit' | 'view') {
-  // 仅切换 UI 状态；mode 不持久化到 content，不触发 emit（避免无变更的幽灵保存）
-  mode.value[i] = m
-}
-
-/** 文本块失焦：切回预览。空块保留为可点击续写行（不自动清理，续写位置不消失）。 */
-function onTextBlur(i: number) {
-  flush()
-  setMode(i, 'view')
-}
-
-/** 文本编辑区随内容自动长高（无缝文档流，不出现滚动条）。 */
-function autoGrowText(el: EventTarget | null) {
-  const ta = el as HTMLTextAreaElement
-  if (!ta) return
-  ta.style.height = 'auto'
-  ta.style.height = ta.scrollHeight + 'px'
-}
-
-/** 尾部追加空文本块（斜杠插入后续写文字的同一入口）。 */
-function addTextBlock() {
-  items.value.push({ type: 'text', content: '' })
-  flush()
-}
-
-/** 续写区回车：与文档任务行行为一致——新建下一行任务；Shift+Enter 才是软换行。 */
-function onTextEnter(e: KeyboardEvent) {
-  if (e.shiftKey || e.isComposing) return
-  e.preventDefault()
-  flush()
-  emit('enter')
-}
-
-// 光标处插入后追加的文本块（空=续写区；非空=斜杠后的后文）→ 自动进入编辑态，
-// 光标落块首（即用户敲 '/' 时的原光标位置），实现连续文档流
-watch(() => items.value.length, (n, old) => {
-  const last = items.value[n - 1]
-  if (n > (old ?? 0) && last?.type === 'text') {
-    nextTick(() => setMode(n - 1, 'edit'))
-  }
-})
+// ── 编辑/预览状态（code/shell/output 双态，默认编辑态）──
+const mode = ref<'edit' | 'view'>('edit')
 
 // ── 折叠/展开（预览态长内容）──
-const expanded = ref<Record<number, boolean>>({})
+const expanded = ref(false)
 
 // ── 一键复制（复制原文，不含行号）──
-const copied = ref<Record<number, boolean>>({})
+const copied = ref(false)
 
-async function copyText(i: number, text: string) {
+async function copyText(text: string) {
   try {
     await navigator.clipboard.writeText(text)
   } catch {
-    // 剪贴板 API 不可用时退化为选区复制
     const ta = document.createElement('textarea')
     ta.value = text
     document.body.appendChild(ta)
@@ -119,33 +53,33 @@ async function copyText(i: number, text: string) {
     document.execCommand('copy')
     document.body.removeChild(ta)
   }
-  copied.value[i] = true
-  setTimeout(() => { copied.value[i] = false }, 1200)
+  copied.value = true
+  setTimeout(() => { copied.value = false }, 1200)
 }
 
 // ── 待办清单 ──
-function addTodo(item: ContentBlock) {
-  if (!item.items) item.items = []
-  item.items.push({ text: '', done: false })
+function addTodo() {
+  if (!item.value.items) item.value.items = []
+  item.value.items.push({ text: '', done: false })
   flush()
 }
 
 // ── 表格 ──
-function addRow(item: ContentBlock) {
-  if (!item.rows) item.rows = [[]]
-  const cols = item.rows[0]?.length || 2
-  item.rows.push(Array(cols).fill(''))
+function addRow() {
+  if (!item.value.rows) item.value.rows = [[]]
+  const cols = item.value.rows[0]?.length || 2
+  item.value.rows.push(Array(cols).fill(''))
   flush()
 }
 
-function addCol(item: ContentBlock) {
-  if (!item.rows) item.rows = [['']]
-  item.rows.forEach(r => r.push(''))
+function addCol() {
+  if (!item.value.rows) item.value.rows = [['']]
+  item.value.rows.forEach(r => r.push(''))
   flush()
 }
 
-function removeRow(item: ContentBlock, ri: number) {
-  item.rows?.splice(ri, 1)
+function removeRow(ri: number) {
+  item.value.rows?.splice(ri, 1)
   flush()
 }
 
@@ -153,12 +87,12 @@ function removeRow(item: ContentBlock, ri: number) {
 const zoomSrc = ref<string | null>(null)
 const imageUploading = ref(false)
 
-function imageUrl(item: ContentBlock): string | null {
-  if (item.attachment_id) return `/api/attachments/${item.attachment_id}/file`
-  return item.content || null
+function imageUrl(): string | null {
+  if (item.value.attachment_id) return `/api/attachments/${item.value.attachment_id}/file`
+  return item.value.content || null
 }
 
-async function onImagePick(item: ContentBlock, e: Event) {
+async function onImagePick(e: Event) {
   const f = (e.target as HTMLInputElement).files?.[0]
   ;(e.target as HTMLInputElement).value = ''
   if (!f) return
@@ -169,8 +103,8 @@ async function onImagePick(item: ContentBlock, e: Event) {
     form.append('file', f)
     if (props.blockId !== undefined) form.append('block_id', String(props.blockId))
     const att = await api.upload<{ id: number }>('/attachments', form)
-    item.attachment_id = att.id
-    item.content = ''
+    item.value.attachment_id = att.id
+    item.value.content = ''
     flush()
   } catch (err) {
     alert(`图片上传失败：${err instanceof Error ? err.message : err}`)
@@ -188,53 +122,11 @@ function lineNumbers(text: string): string {
 
 <template>
   <div class="content-editor">
-    <div v-if="items.length === 0" class="ce-empty">空内容块，从下方添加。</div>
-
-    <div
-      v-for="(item, i) in items"
-      :key="i"
-      class="ce-item"
-      :class="[`ce-${item.type}`, { 'ce-plain': item.type === 'text' && modeOf(i, 'view') === 'view' }]"
-    >
-      <!-- ── 文本块：展示态无边框段落（如飞书文本块），点击进入编辑 ── -->
-      <template v-if="item.type === 'text'">
-        <div v-if="modeOf(i, 'view') === 'view'" class="ce-text-view">
-          <div
-            v-if="item.content"
-            class="ce-preview md-render"
-            :class="{ collapsed: !expanded[i] }"
-            v-html="renderMarkdown(item.content)"
-            @click="setMode(i, 'edit')"
-          ></div>
-          <div v-else class="ce-placeholder" @click="setMode(i, 'edit')">输入文字…</div>
-          <!-- hover 悬浮操作（在块内部，不外溢不裁切） -->
-          <div class="ce-text-ops" @mousedown.prevent>
-            <button class="ce-op" :title="copied[i] ? '已复制' : '复制'" @click="copyText(i, item.content || '')">⧉</button>
-            <button class="ce-op" title="上移" @click="moveItem(i, -1)">↑</button>
-            <button class="ce-op" title="下移" @click="moveItem(i, 1)">↓</button>
-            <button class="ce-op danger" title="删除" @click="removeItem(i)">✕</button>
-          </div>
-          <button v-if="item.content && !expanded[i]" class="ce-expand" @click="expanded[i] = true">展开 ▾</button>
-          <button v-else-if="item.content" class="ce-expand" @click="expanded[i] = false">收起 ▴</button>
-        </div>
-        <div v-else class="ce-text-edit">
-          <textarea
-            v-model="item.content"
-            v-focus
-            class="ce-input ce-textarea"
-            placeholder="输入文字…"
-            @focus="autoGrowText($event.target)"
-            @input="autoGrowText($event.target); flush"
-            @keydown.enter="onTextEnter($event)"
-            @blur="onTextBlur(i)"
-          ></textarea>
-        </div>
-      </template>
-
+    <div class="ce-item" :class="`ce-${item.type}`">
       <!-- ── 代码 / 命令 / 输出：一体化头部栏 + 主体 ── -->
-      <template v-else-if="item.type === 'code' || item.type === 'shell' || item.type === 'output'">
+      <template v-if="item.type === 'code' || item.type === 'shell' || item.type === 'output'">
         <div class="ce-head">
-          <span class="ce-type" :class="'ce-type-' + item.type"><span class="ce-dot"></span>{{ TYPE_LABEL[item.type] }}</span>
+          <span class="ce-type" :class="'ce-type-' + item.type"><span class="ce-dot"></span>{{ { code: '代码', shell: '命令', output: '输出' }[item.type] }}</span>
           <input
             v-if="item.type === 'code'"
             v-model="item.language"
@@ -244,16 +136,13 @@ function lineNumbers(text: string): string {
           />
           <span class="ce-spacer"></span>
           <div class="ce-seg">
-            <button class="ce-op" :class="{ on: modeOf(i, 'edit') === 'edit' }" @click="setMode(i, 'edit')">编辑</button>
-            <button class="ce-op" :class="{ on: modeOf(i, 'view') === 'view' }" @click="setMode(i, 'view')">预览</button>
+            <button class="ce-op" :class="{ on: mode === 'edit' }" @click="mode = 'edit'">编辑</button>
+            <button class="ce-op" :class="{ on: mode === 'view' }" @click="mode = 'view'">预览</button>
           </div>
-          <button class="ce-op copy-btn" @click="copyText(i, item.content || '')">{{ copied[i] ? '已复制 ✓' : '复制' }}</button>
-          <button class="ce-op" title="上移" @click="moveItem(i, -1)">↑</button>
-          <button class="ce-op" title="下移" @click="moveItem(i, 1)">↓</button>
-          <button class="ce-op danger" title="删除" @click="removeItem(i)">✕</button>
+          <button class="ce-op copy-btn" @click="copyText(item.content || '')">{{ copied ? '已复制 ✓' : '复制' }}</button>
         </div>
         <textarea
-          v-if="modeOf(i, 'edit') === 'edit'"
+          v-if="mode === 'edit'"
           v-model="item.content"
           class="ce-input ce-textarea mono"
           :class="{ 'shell-input': item.type === 'shell' }"
@@ -262,12 +151,12 @@ function lineNumbers(text: string): string {
           @blur="flush"
         ></textarea>
         <div v-else class="ce-preview-wrap">
-          <div class="ce-code-view" :class="{ collapsed: !expanded[i] }">
+          <div class="ce-code-view" :class="{ collapsed: !expanded }">
             <pre class="ce-ln">{{ lineNumbers(item.content || '') }}</pre>
             <pre class="ce-code" v-html="highlight(item.content || '', item.language)"></pre>
           </div>
-          <button v-if="!expanded[i]" class="ce-expand" @click="expanded[i] = true">展开 ▾</button>
-          <button v-else class="ce-expand" @click="expanded[i] = false">收起 ▴</button>
+          <button v-if="!expanded" class="ce-expand" @click="expanded = true">展开 ▾</button>
+          <button v-else class="ce-expand" @click="expanded = false">收起 ▴</button>
         </div>
       </template>
 
@@ -275,10 +164,6 @@ function lineNumbers(text: string): string {
       <template v-else-if="item.type === 'todo'">
         <div class="ce-head">
           <span class="ce-type ce-type-todo"><span class="ce-dot"></span>待办</span>
-          <span class="ce-spacer"></span>
-          <button class="ce-op" title="上移" @click="moveItem(i, -1)">↑</button>
-          <button class="ce-op" title="下移" @click="moveItem(i, 1)">↓</button>
-          <button class="ce-op danger" title="删除" @click="removeItem(i)">✕</button>
         </div>
         <div class="ce-body">
           <div v-for="(t, ti) in item.items" :key="ti" class="ce-todo-row">
@@ -286,7 +171,7 @@ function lineNumbers(text: string): string {
             <input v-model="t.text" class="ce-input ce-todo-text" :class="{ done: t.done }" placeholder="待办内容..." @change="flush" />
             <button class="ce-op danger ce-todo-del" title="删除此项" @click="item.items?.splice(ti, 1); flush()">✕</button>
           </div>
-          <button class="ce-add" @click="addTodo(item)">＋ 添加待办</button>
+          <button class="ce-add" @click="addTodo">＋ 添加待办</button>
         </div>
       </template>
 
@@ -294,10 +179,6 @@ function lineNumbers(text: string): string {
       <template v-else-if="item.type === 'table'">
         <div class="ce-head">
           <span class="ce-type ce-type-table"><span class="ce-dot"></span>表格</span>
-          <span class="ce-spacer"></span>
-          <button class="ce-op" title="上移" @click="moveItem(i, -1)">↑</button>
-          <button class="ce-op" title="下移" @click="moveItem(i, 1)">↓</button>
-          <button class="ce-op danger" title="删除" @click="removeItem(i)">✕</button>
         </div>
         <div class="ce-body">
           <table class="ce-table">
@@ -306,13 +187,13 @@ function lineNumbers(text: string): string {
                 <td v-for="(_, ci) in row" :key="ci">
                   <input v-model="row[ci]" class="ce-input ce-cell" @change="flush" />
                 </td>
-                <td class="ce-row-op"><button class="ce-op danger" title="删行" @click="removeRow(item, ri)">✕</button></td>
+                <td class="ce-row-op"><button class="ce-op danger" title="删行" @click="removeRow(ri)">✕</button></td>
               </tr>
             </tbody>
           </table>
           <div class="ce-table-ops">
-            <button class="ce-add" @click="addRow(item)">＋ 行</button>
-            <button class="ce-add" @click="addCol(item)">＋ 列</button>
+            <button class="ce-add" @click="addRow">＋ 行</button>
+            <button class="ce-add" @click="addCol">＋ 列</button>
           </div>
         </div>
       </template>
@@ -321,30 +202,28 @@ function lineNumbers(text: string): string {
       <template v-else-if="item.type === 'image'">
         <div class="ce-head">
           <span class="ce-type ce-type-image"><span class="ce-dot"></span>图片</span>
-          <span class="ce-spacer"></span>
-          <button class="ce-op" title="上移" @click="moveItem(i, -1)">↑</button>
-          <button class="ce-op" title="下移" @click="moveItem(i, 1)">↓</button>
-          <button class="ce-op danger" title="删除" @click="removeItem(i)">✕</button>
         </div>
         <div class="ce-body ce-image-body">
-          <template v-if="imageUrl(item)">
-            <img :src="imageUrl(item)!" class="ce-image" @click="zoomSrc = imageUrl(item)" title="点击放大" />
+          <template v-if="imageUrl()">
+            <img :src="imageUrl()!" class="ce-image" @click="zoomSrc = imageUrl()" title="点击放大" />
             <label class="ce-replace" :class="{ disabled: imageUploading }">
               {{ imageUploading ? '上传中…' : '更换图片' }}
-              <input type="file" accept="image/*" :disabled="imageUploading" @change="onImagePick(item, $event)" />
+              <input type="file" accept="image/*" :disabled="imageUploading" @change="onImagePick" />
             </label>
           </template>
           <label v-else class="ce-upload" :class="{ disabled: imageUploading }">
             <span class="ce-upload-icon">🖼</span>
             <span>{{ imageUploading ? '上传中…' : '点击上传图片' }}</span>
-            <input type="file" accept="image/*" :disabled="imageUploading" @change="onImagePick(item, $event)" />
+            <input type="file" accept="image/*" :disabled="imageUploading" @change="onImagePick" />
           </label>
         </div>
       </template>
-    </div>
 
-    <!-- 尾部追加入口：hover 浮现，代码块之后想补文字无需再敲斜杠 -->
-    <button v-if="items.length > 0" class="ce-add ce-add-text" @click="addTextBlock">＋ 文本</button>
+      <!-- ── text 兜底（新模型正文走 title，不出现于此）── -->
+      <template v-else>
+        <div class="ce-body">{{ item.content }}</div>
+      </template>
+    </div>
 
     <!-- 图片放大遮罩 -->
     <div v-if="zoomSrc" class="ce-zoom" @click="zoomSrc = null">
@@ -354,8 +233,7 @@ function lineNumbers(text: string): string {
 </template>
 
 <style scoped>
-.content-editor { display: flex; flex-direction: column; gap: 10px; }
-.ce-empty { color: var(--muted); font-size: 0.85rem; padding: 8px; }
+.content-editor { display: flex; flex-direction: column; flex: 1; min-width: 0; }
 
 /* ── 块容器：卡片式 + 一体化头部栏（无浮动元素，彻底告别裁切）── */
 .ce-item {
@@ -387,7 +265,6 @@ function lineNumbers(text: string): string {
   letter-spacing: 0.04em;
 }
 .ce-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
-.ce-type-text .ce-dot { background: #8a8f98; }
 .ce-type-code .ce-dot { background: #4a5d8f; }
 .ce-type-shell .ce-dot { background: #b07916; }
 .ce-type-output .ce-dot { background: #2e7d51; }
@@ -445,61 +322,16 @@ function lineNumbers(text: string): string {
 }
 .ce-input:focus { box-shadow: none; }
 
-/* 文本块编辑态＝任务输入行同款：与 .row-input 排版逐字对齐（前后一致的文档流） */
-.ce-text-edit { background: transparent; border: none; border-radius: 0; box-shadow: none; overflow: visible; }
 .ce-textarea {
-  width: 100%; min-height: 28px; resize: none; box-sizing: border-box;
-  border: none; outline: none; background: transparent; border-radius: 4px;
-  padding: 5px 2px; font-family: inherit; font-size: 15px; line-height: 1.75;
+  width: 100%; min-height: 60px; resize: none; box-sizing: border-box;
+  border: none; outline: none; background: transparent; border-radius: 0;
+  padding: 10px 12px; font-family: inherit; font-size: 0.88rem; line-height: 1.6;
   color: var(--fg); overflow: hidden;
   field-sizing: content;
 }
 .ce-textarea::placeholder { color: #c9cdd1; }
 .mono { font-family: var(--font-mono); font-size: 0.84rem; }
 .shell-input { background: #1f232a; color: #9ece6a; }
-
-/* ── 文本块：展示态完全无边框（段落式），hover 轻灰 ── */
-.ce-item.ce-plain { border: none; background: transparent; }
-.ce-text-view { position: relative; border-radius: var(--radius); }
-.ce-text-view:hover { background: var(--bg-hover); }
-.ce-preview { cursor: text; min-height: 24px; padding: 5px 2px; border-radius: var(--radius); font-size: 15px; }
-.ce-placeholder {
-  color: #c9cdd1; font-size: 15px; cursor: text;
-  padding: 5px 2px; min-height: 24px; border-radius: var(--radius);
-}
-.ce-preview.collapsed { max-height: 300px; overflow: hidden; }
-
-/* 文本块 hover 悬浮操作：块内部右上角，不外溢 */
-.ce-text-ops {
-  position: absolute;
-  top: 2px;
-  right: 2px;
-  display: inline-flex;
-  background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  padding: 1px 2px;
-  box-shadow: var(--shadow);
-  opacity: 0;
-  transition: opacity 0.15s;
-  z-index: 2;
-}
-.ce-text-view:hover .ce-text-ops { opacity: 1; }
-.ce-text-ops .ce-op { padding: 2px 7px; }
-
-/* 文本块编辑态：无边框，仅信任光标（排版与展示态一致，切换不跳动） */
-.ce-edit-hint { display: none; }
-
-/* Markdown 渲染 */
-.md-render :deep(p) { margin: 4px 0; white-space: pre-wrap; word-break: break-word; }
-.md-render :deep(p.md-gap) { height: 0.5em; }
-.md-render :deep(h2), .md-render :deep(h3), .md-render :deep(h4) { margin: 10px 0 4px; }
-.md-render :deep(pre.md-pre) {
-  background: var(--bg-alt); border: 1px solid var(--border); padding: 10px 12px; border-radius: var(--radius); overflow-x: auto;
-  font-family: var(--font-mono); font-size: 0.84rem; white-space: pre-wrap;
-}
-.md-render :deep(code) { font-family: var(--font-mono); }
-.md-render :deep(ul), .md-render :deep(ol) { margin: 4px 0; padding-left: 24px; }
 
 /* 展开/收起：幽灵分隔线按钮 */
 .ce-expand {
@@ -514,8 +346,6 @@ function lineNumbers(text: string): string {
   padding: 4px;
 }
 .ce-expand:hover { color: var(--fg); background: var(--bg-hover); }
-.ce-plain .ce-expand { border: none; width: auto; align-self: center; font-size: 11px; color: var(--faint); padding: 2px 10px; }
-.ce-plain .ce-expand:hover { color: var(--accent); background: var(--accent-light); }
 
 /* ── 代码预览：深色 + 行号 ── */
 .ce-preview-wrap { position: relative; }
@@ -554,8 +384,6 @@ function lineNumbers(text: string): string {
   cursor: pointer;
 }
 .ce-add:hover { color: var(--accent); background: var(--accent-light); }
-.ce-add-text { opacity: 0; transition: opacity 0.15s, color 0.15s, background 0.15s; }
-.content-editor:hover .ce-add-text { opacity: 1; }
 
 /* 表格 */
 .ce-table { border-collapse: collapse; width: 100%; }

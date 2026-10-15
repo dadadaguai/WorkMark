@@ -7,8 +7,6 @@
 内容不做格式识别，统一作为文本内容块保存（保留换行缩进）。
 """
 
-import json
-
 from flask import Blueprint, request, jsonify, g
 
 bp = Blueprint("inbox", __name__)
@@ -16,24 +14,15 @@ bp = Blueprint("inbox", __name__)
 STATUS_LABELS = {"pending": "待整理", "moved": "已移动", "copied": "已复制", "linked": "已关联"}
 
 
-def _block_title(content: str):
-    """取内容首个非空行作为块标题，截断 60 字符。"""
-    for line in content.splitlines():
-        t = line.strip()
-        if t:
-            return t[:60]
-    return None
-
-
 def _insert_block(document_id: int, content: str) -> int:
-    """在目标文档顶层末尾插入任务块，返回块 id。"""
+    """在目标文档顶层末尾插入 text 任务段（title 存多行正文），返回块 id。"""
     max_order = g.db.execute(
         "SELECT COALESCE(MAX(sort_order), -1) FROM blocks WHERE document_id = ? AND parent_id IS NULL",
         (document_id,),
     ).fetchone()[0]
     cur = g.db.execute(
-        "INSERT INTO blocks (document_id, parent_id, title, content, sort_order) VALUES (?, NULL, ?, ?, ?)",
-        (document_id, _block_title(content), json.dumps([{"type": "text", "content": content}], ensure_ascii=False), max_order + 1),
+        "INSERT INTO blocks (document_id, parent_id, title, content, sort_order) VALUES (?, NULL, ?, '[]', ?)",
+        (document_id, content, max_order + 1),
     )
     return cur.lastrowid
 

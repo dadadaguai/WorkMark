@@ -30,12 +30,16 @@ export interface InboxItem {
   block_id?: number
 }
 
+/** 任务段（正文流模型，每行 = 一个任务段）：
+ * - text 行：title 存多行正文，content 恒为 '[]'
+ * - content 行：title 恒为 ''，content 为 '[{单个内容块}]'（code/shell/output/todo/table/image）
+ */
 export interface Block {
   id: number
   document_id: number
   parent_id: number | null
   title: string | null
-  content: string  // JSON 数组
+  content: string  // '[]' 或 '[{单个 ContentBlock}]'
   sort_order: number
   work_start_time: string | null
   work_end_time: string | null

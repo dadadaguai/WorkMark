@@ -1,6 +1,8 @@
 <script setup lang="ts">
-/** 文档流编辑器：进入即文档，直接输入即任务（Notion/飞书式交互）。
- * Enter 新建任务 / Shift+Enter 换行 / Tab 缩进为子任务 / 斜杠命令插入富内容。
+/** 正文流编辑器（飞书式单文本流，每行 = 一个任务段）。
+ * 回车 = 正文换行；Ctrl+Enter 或连续两个空行 = 分出新任务；
+ * 内容块（代码/表格/图片等）自动断开任务：块上正文一个任务，块下另起一个；
+ * Tab / Shift+Tab = 任务段级缩进/提升；斜杠命令 / ``` 在光标处插入内容块。
  */
 import { ref, computed, watch, nextTick, onMounted, onUnmounted } from 'vue'
 import { useRouter, useRoute, onBeforeRouteLeave } from 'vue-router'
@@ -35,9 +37,13 @@ function persistTemplates() {
 }
 
 function saveBlockAsTemplate(block: Block) {
-  const name = prompt('模板名称：', block.title || '未命名模板')
+  const name = prompt('模板名称：', summarize(block) || '未命名模板')
   if (!name) return
-  templates.value.push({ name, content: block.content })
+  // text 行把正文包成 text 项存模板；content 行直接存单块 JSON
+  const content = isTextRow(block)
+    ? JSON.stringify([{ type: 'text', content: block.title ?? '' }])
+    : block.content
+  templates.value.push({ name, content })
   persistTemplates()
 }
 
@@ -120,14 +126,14 @@ function realIdOf(id: number): number {
 }
 
 /** 本地立即创建块并返回（零延迟可输入/聚焦）；后台 POST 落库，失败移除本地行。 */
-function createBlockOptimistic(after: Block | null, parentId: number | null, title: string): Block {
+function createBlockOptimistic(after: Block | null, parentId: number | null, title: string, content = '[]'): Block {
   const tempId = tempIdSeq--
   const temp: Block = {
     id: tempId,
     document_id: Number(props.id),
     parent_id: parentId,
     title,
-    content: '[]',
+    content,
     sort_order: after ? after.sort_order + 0.5 : Number.MAX_SAFE_INTEGER / 2,
     work_start_time: null,
     work_end_time: null,
@@ -142,7 +148,7 @@ function createBlockOptimistic(after: Block | null, parentId: number | null, tit
         parent_id: parentId,
         after_id: after ? realIdOf(after.id) : undefined,
         title,
-        content: '[]',
+        content,
       })
       tempToReal.set(tempId, nb.id)
       temp.sort_order = nb.sort_order // 仅同步排序；id 保持本地键，避免整行重挂载
@@ -273,30 +279,41 @@ function hasContent(block: Block): boolean {
   return block.content !== '[]' && block.content !== ''
 }
 
-/** 折叠视图卡片摘要：首块类型化描述 + 内容块总数。 */
-function summarize(block: Block): string {
+/** text 行 = 无内容块（title 存多行正文）；content 行 = 单个内容块。 */
+function isTextRow(block: Block): boolean {
+  return !hasContent(block)
+}
+
+/** 取 content 行的唯一内容块（text 行返回 null）。 */
+function contentItemOf(block: Block): ContentBlock | null {
   try {
-    const items = JSON.parse(block.content) as ContentBlock[]
-    if (!Array.isArray(items) || items.length === 0) return '（空）'
-    const first = items[0]
-    let desc: string
-    switch (first.type) {
-      case 'text': desc = (first.content || '').trim().slice(0, 60) || '（空文本）'; break
-      case 'code': desc = `代码${first.language ? ' · ' + first.language : ''} · ${(first.content || '').split('\n').length} 行`; break
-      case 'shell': desc = `命令 · ${(first.content || '').slice(0, 50)}`; break
-      case 'output': desc = `输出 · ${(first.content || '').split('\n').length} 行`; break
-      case 'todo': {
-        const total = first.items?.length ?? 0
-        const done = first.items?.filter(i => i.done).length ?? 0
-        desc = `待办 ${total} 项（完成 ${done}）`; break
-      }
-      case 'table': desc = `表格 ${first.rows?.length ?? 0} 行`; break
-      case 'image': desc = '[图片]'; break
-      default: desc = '（未知类型）'
-    }
-    return items.length > 1 ? `${desc}　— 共 ${items.length} 个内容块` : desc
+    const arr = JSON.parse(block.content) as ContentBlock[]
+    return Array.isArray(arr) && arr[0] ? arr[0] : null
   } catch {
-    return '（内容不可解析）'
+    return null
+  }
+}
+
+/** 摘要：text 行取正文首行，content 行取块类型化描述。 */
+function summarize(block: Block): string {
+  if (isTextRow(block)) {
+    const t = (block.title ?? '').trim()
+    return t ? t.split('\n')[0].slice(0, 60) : '（空）'
+  }
+  const first = contentItemOf(block)
+  if (!first) return '（空）'
+  switch (first.type) {
+    case 'code': return `代码${first.language ? ' · ' + first.language : ''} · ${(first.content || '').split('\n').length} 行`
+    case 'shell': return `命令 · ${(first.content || '').slice(0, 50)}`
+    case 'output': return `输出 · ${(first.content || '').split('\n').length} 行`
+    case 'todo': {
+      const total = first.items?.length ?? 0
+      const done = first.items?.filter(i => i.done).length ?? 0
+      return `待办 ${total} 项（完成 ${done}）`
+    }
+    case 'table': return `表格 ${first.rows?.length ?? 0} 行`
+    case 'image': return '[图片]'
+    default: return '（未知类型）'
   }
 }
 
@@ -481,16 +498,22 @@ function updateBlockContent(block: Block, content: string) {
   lastEditedBlockId.value = block.id
 }
 
-/** 往块的 content 追加内容块（斜杠命令 / ``` / 模板插入），走撤销记录。 */
-function appendContentBlocks(blockId: number, items: ContentBlock[]) {
-  const block = blocks.value.find(b => b.id === blockId)
-  if (!block) return
-  const arr = JSON.parse(block.content || '[]') as ContentBlock[]
-  const before = block.content
-  arr.push(...items)
-  const after = JSON.stringify(arr)
-  recordBlockChange(blockId, 'content', before, after)
-  applyContent(blockId, after)
+/** 在 block 之后按序插入任务段行：非 text 项 → content 行；text 项（非空）→ text 行；
+ * tail 作为最后一个 text 行（空 tail 也建行，作为内容块后的续写任务），返回该行供聚焦。 */
+async function insertRowsAfter(block: Block, items: ContentBlock[], tail: string): Promise<Block> {
+  await ensureBlockPersisted(block)
+  let after = block
+  const parentId = block.parent_id
+  for (const it of items) {
+    if (it.type === 'text') {
+      const c = (it.content || '').replace(/^\n+|\n+$/g, '')
+      if (!c.trim()) continue // 空 text 项（模板占位）跳过
+      after = createBlockOptimistic(after, parentId, c)
+    } else {
+      after = createBlockOptimistic(after, parentId, '', JSON.stringify([it]))
+    }
+  }
+  return createBlockOptimistic(after, parentId, tail)
 }
 
 function makeDefaultContent(type: ContentBlock['type']): ContentBlock {
@@ -533,13 +556,18 @@ watch(flatRows, () => {
 // ── 焦点管理 ──
 function focusRow(blockId: number, pos: 'start' | 'end' | number = 'end') {
   nextTick(() => {
-    const ta = document.querySelector<HTMLTextAreaElement>(`[data-block-id="${blockId}"] textarea.row-input`)
-    if (!ta) return // 行被折叠隐藏时静默跳过
-    ta.focus()
-    const end = ta.value.length
-    const idx = pos === 'start' ? 0 : pos === 'end' ? end : Math.min(pos as number, end)
-    ta.setSelectionRange(idx, idx)
-    autoResize(ta)
+    // text 行聚焦正文 textarea；content 行聚焦块内第一个可编辑元素
+    const el = document.querySelector<HTMLTextAreaElement>(
+      `[data-block-id="${blockId}"] textarea.row-input, [data-block-id="${blockId}"] .row-rich textarea, [data-block-id="${blockId}"] .row-rich input`,
+    )
+    if (!el) return // 行被折叠隐藏时静默跳过
+    el.focus()
+    if (el instanceof HTMLTextAreaElement) {
+      const end = el.value.length
+      const idx = pos === 'start' ? 0 : pos === 'end' ? end : Math.min(pos as number, end)
+      el.setSelectionRange(idx, idx)
+      autoResize(el)
+    }
   })
 }
 
@@ -593,16 +621,35 @@ function onRowInput(row: BlockRow, e: Event) {
   applyTitle(block.id, now)
   autoResize(ta)
 
-  // ``` 出现在光标处 → 光标前正文留在任务行，代码块插在中间（光标处插入）
-  if (/```\s*$/.test(now)) {
-    const head = now.replace(/```\s*$/, '')
+  // 正文中间敲 ``` → 就地插入代码块：``` 前正文留当前行，后文归块下新任务
+  if (now.slice(0, pos).endsWith('```')) {
+    const head = now.slice(0, pos - 3)
+    const tail = now.slice(pos)
     recordBlockChange(block.id, 'title', now, head)
     applyTitle(block.id, head)
-    appendContentBlocks(block.id, [{ type: 'code', content: '', language: 'python' }])
     closeSlash()
-    // 代码块下接续写区（ContentEditor 检测到后自动进入编辑态聚焦）
-    appendContentBlocks(block.id, [makeDefaultContent('text')])
+    void insertRowsAfter(block, [{ type: 'code', content: '', language: 'python' }], tail)
+      .then(nb => focusRow(nb.id, 'start'))
     return
+  }
+
+  // 连续两个空行 → 分出新任务：空行前正文留当前行，后文移入新行
+  const gap = /\n[ \t]*\n[ \t]*\n/.exec(now)
+  if (gap) {
+    const head = now.slice(0, gap.index)
+    const tail = now.slice(gap.index + gap[0].length)
+    if (head.trim() || tail.trim()) {
+      recordBlockChange(block.id, 'title', now, head)
+      applyTitle(block.id, head)
+      closeSlash()
+      void (async () => {
+        await ensureBlockPersisted(block)
+        if (!blocks.value.some(b => b.id === block.id)) return
+        const nb = createBlockOptimistic(block, block.parent_id, tail)
+        focusRow(nb.id, 'start')
+      })()
+      return
+    }
   }
 
   // 斜杠菜单打开中：光标退回 slashPos 之前或 '/' 被删 → 关闭；否则记录光标（选中时消费 '/命令' 到此处）
@@ -630,17 +677,23 @@ function onSlashSelect(item: SlashItem) {
   // 消费 '/查询词'（查询词到空白为止；光标提前则只消费到光标），后文完整保留
   const q = text.slice(m.slashPos + 1).match(/^\S+/)?.[0] ?? ''
   const cutEnd = Math.min(m.pos, m.slashPos + 1 + q.length)
-  const head = text.slice(0, m.slashPos) // 光标（'/'）前正文：留在任务行
-  const tail = text.slice(cutEnd)        // 命令后正文：移到插入块下方，形成连续文档流
-  recordBlockChange(block.id, 'title', text, head)
-  applyTitle(block.id, head)
+  const head = text.slice(0, m.slashPos) // '/' 前正文：留在当前任务行
+  const tail = text.slice(cutEnd)        // 命令后正文：移到插入块下方新任务行
   const inserted: ContentBlock[] = item.tplIndex !== undefined
     ? (() => { try { return JSON.parse(templates.value[item.tplIndex!].content) as ContentBlock[] } catch { return [] } })()
     : item.type && item.type !== 'text'
       ? [makeDefaultContent(item.type)]
       : []
-  // 光标处插入：插入块 + 后文文本块（空=续写区；ContentEditor 检测到后自动聚焦、光标落块首）
-  appendContentBlocks(block.id, [...inserted, { type: 'text', content: tail }])
+  if (inserted.length === 0) {
+    // 选「文本」= 只消费命令，前后文合并留在当前行，光标落断点处
+    recordBlockChange(block.id, 'title', text, head + tail)
+    applyTitle(block.id, head + tail)
+    focusRow(block.id, head.length)
+    return
+  }
+  recordBlockChange(block.id, 'title', text, head)
+  applyTitle(block.id, head)
+  void insertRowsAfter(block, inserted, tail).then(nb => focusRow(nb.id, 'start'))
 }
 
 // ── 行键盘行为 ──
@@ -670,10 +723,10 @@ function onRowKeydown(row: BlockRow, e: KeyboardEvent) {
     if ((key === 'z' && e.shiftKey) || key === 'y') { e.preventDefault(); redo(); return }
   }
 
-  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); splitRowAtCursor(row, ta); return }
-  if (e.key === 'Enter' && e.shiftKey) { e.preventDefault(); insertNewlineAtCursor(row, ta); return }
+  // 回车 = 正文换行（textarea 原生行为，不拦截）；Ctrl+Enter = 光标处分出新任务
+  if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); splitRowAtCursor(row, ta); return }
   if (e.key === 'Tab') { e.preventDefault(); e.shiftKey ? outdentBlock(row) : indentBlock(row); return }
-  if (e.key === 'Backspace' && ta.selectionStart === 0 && ta.selectionEnd === 0) { maybeDeleteEmptyRow(row, e); return }
+  if (e.key === 'Backspace' && ta.selectionStart === 0 && ta.selectionEnd === 0) { mergeOrDeleteAtRowStart(row, e); return }
   if (e.key === 'ArrowUp' && ta.selectionStart === 0 && ta.selectionEnd === 0) {
     const prev = neighborRowId(block.id, -1)
     if (prev !== null) { e.preventDefault(); focusRow(prev, 'end') }
@@ -686,7 +739,7 @@ function onRowKeydown(row: BlockRow, e: KeyboardEvent) {
   }
 }
 
-/** Enter：光标处拆分，tail 移入新块（乐观插入：本地立即成行，后台落库）。 */
+/** Ctrl+Enter：光标处拆分任务，tail 移入新任务段（乐观插入：本地立即成行，后台落库）。 */
 async function splitRowAtCursor(row: BlockRow, ta: HTMLTextAreaElement) {
   const block = row.block
   // 当前块若为临时块（极快连续回车），先落库保证 after_id / 拆分语义正确
@@ -709,27 +762,12 @@ async function splitRowAtCursor(row: BlockRow, ta: HTMLTextAreaElement) {
   focusRow(nb.id, 'start')
 }
 
-/** Shift+Enter：任务内软换行。 */
-function insertNewlineAtCursor(row: BlockRow, ta: HTMLTextAreaElement) {
-  const pos = ta.selectionStart ?? 0
-  const text = row.block.title ?? ''
-  const next = text.slice(0, pos) + '\n' + text.slice(ta.selectionEnd ?? pos)
-  recordBlockChange(row.block.id, 'title', text, next)
-  applyTitle(row.block.id, next)
-  focusRow(row.block.id, pos + 1)
-}
-
 /** 在当前块之后新建同级空任务块并聚焦（乐观插入，零延迟可输入）。 */
 async function addBlockAfter(block: Block) {
   await ensureBlockPersisted(block)
   if (!blocks.value.some(b => b.id === block.id)) return // 落库失败行已移除
   const nb = createBlockOptimistic(block, block.parent_id, '')
   focusRow(nb.id, 'start')
-}
-
-/** 内容续写区回车：与文档任务行行为一致——新建下一行任务。 */
-async function onContentEnter(block: Block) {
-  await addBlockAfter(block)
 }
 
 /** 为当前块新建一个子块（parent_id = 当前块）并聚焦。 */
@@ -782,13 +820,35 @@ async function outdentBlock(row: BlockRow) {
   focusRow(block.id, 'end')
 }
 
-/** Backspace 行首：空块且无子块 → 删除并聚焦上一行。 */
-async function maybeDeleteEmptyRow(row: BlockRow, e: KeyboardEvent) {
+/** Backspace 行首：空行且无子块 → 删除并聚焦上一行；
+ * 非空 text 行且上一行也是 text 行 → 正文合并进上一行（连续文档流），光标落合并点。 */
+async function mergeOrDeleteAtRowStart(row: BlockRow, e: KeyboardEvent) {
   const block = row.block
-  if (block.title) return // 有文本不拦
-  if (childrenOf(block.id).length > 0) return // 有子块不删
+  if (childrenOf(block.id).length > 0) return // 有子块不删不并
+  const prevId = neighborRowId(block.id, -1)
+  const prev = prevId !== null ? blocks.value.find(b => b.id === prevId) : null
+
+  // 非空行：仅在上一行也是 text 行时合并，否则不拦（行首 Backspace 原生无效果）
+  if (block.title) {
+    if (!prev || !isTextRow(prev)) return
+    e.preventDefault()
+    const mergePos = (prev.title ?? '').length
+    recordBlockChange(prev.id, 'title', prev.title ?? '', (prev.title ?? '') + block.title)
+    applyTitle(prev.id, (prev.title ?? '') + block.title)
+    await ensureBlockPersisted(block)
+    pendingUpdates.delete(block.id)
+    try {
+      await api.del(`/blocks/${realIdOf(block.id)}`)
+    } catch {
+      return
+    }
+    blocks.value = blocks.value.filter(b => b.id !== block.id)
+    focusRow(prev.id, mergePos)
+    return
+  }
+
+  // 空行：删除并聚焦上一行
   e.preventDefault()
-  const prev = neighborRowId(block.id, -1)
   await ensureBlockPersisted(block) // 临时块先落库，删除才能打到服务端真实块
   pendingUpdates.delete(block.id) // 防止队列残留更新打到已删块
   try {
@@ -803,7 +863,7 @@ async function maybeDeleteEmptyRow(row: BlockRow, e: KeyboardEvent) {
     focusRow(nb.id, 'end')
     return
   }
-  if (prev !== null) focusRow(prev, 'end')
+  if (prevId !== null) focusRow(prevId, 'end')
 }
 
 // ── 块删除确认对话框（FR-08：影响范围 + 子块保留选项）──
@@ -1046,15 +1106,25 @@ async function onDrop(block: Block, e: DragEvent) {
               title="添加子块（Tab）"
               @click.stop="addChildBlock(row.block)"
             >＋</button>
+            <!-- text 行：多行正文 textarea（回车=换行，Ctrl+Enter/双空行分任务） -->
             <textarea
+              v-if="isTextRow(row.block)"
               class="row-input"
               rows="1"
               :value="row.block.title ?? ''"
-              placeholder="输入任务，'/' 插入内容"
+              placeholder="输入正文，回车换行；Ctrl+Enter 或两个空行分任务，'/' 插入内容"
               @input="onRowInput(row, $event)"
               @keydown="onRowKeydown(row, $event)"
               @blur="flushSaves()"
             ></textarea>
+            <!-- content 行：单个内容块（删除/复制走 ⋯ 菜单；Tab 缩进/拖拽排序与 text 行一致） -->
+            <ContentEditor
+              v-else-if="isExpanded(row.block.id)"
+              class="row-rich"
+              :model-value="row.block.content"
+              :block-id="row.block.id"
+              @update:model-value="updateBlockContent(row.block, $event)"
+            />
             <button
               v-if="collapsedView"
               class="row-more"
@@ -1099,25 +1169,17 @@ async function onDrop(block: Block, e: DragEvent) {
             <button class="menu-item danger" @click="moreMenuId = null; deleteBlock(row.block.id)">✕ 删除…</button>
           </div>
 
-          <!-- 富内容 / 折叠摘要 -->
-          <ContentEditor
-            v-if="isExpanded(row.block.id) && hasContent(row.block)"
-            class="row-rich"
-            :model-value="row.block.content"
-            :block-id="row.block.id"
-            @update:model-value="updateBlockContent(row.block, $event)"
-            @enter="onContentEnter(row.block)"
-          />
+          <!-- 折叠视图：任务段摘要（text 行取首行，content 行取类型化描述） -->
           <div
-            v-else-if="!isExpanded(row.block.id)"
+            v-if="!isExpanded(row.block.id)"
             class="row-summary"
             title="点击展开"
             @click="toggleExpand(row.block.id)"
           >{{ summarize(row.block) }}</div>
 
-          <!-- 富内容下方：新建任务入口（解决插入内容块后无法继续输入的问题） -->
+          <!-- 内容块下方：手动另起任务入口（内容块天然断开任务，这是补充手势） -->
           <button
-            v-if="hasContent(row.block) && isExpanded(row.block.id)"
+            v-if="!isTextRow(row.block) && isExpanded(row.block.id)"
             class="row-add-after"
             @click.stop="addBlockAfter(row.block)"
           >＋ 在此后新建任务</button>
@@ -1138,7 +1200,7 @@ async function onDrop(block: Block, e: DragEvent) {
     <!-- 删除块确认对话框（FR-08：影响范围展示 + 子块是否一并删除） -->
     <ConfirmDialog
       v-if="deleteTarget"
-      :title="`确认删除任务块「${deleteTarget.block.title || '无标题'}」？`"
+      :title="`确认删除任务段「${summarize(deleteTarget.block)}」？`"
       :message="deleteTarget.direct > 0 ? '默认删除时子块将一并删除，且不可恢复。' : '删除后不可恢复。'"
       :details="deleteDetails"
       confirmText="删除"
@@ -1367,8 +1429,8 @@ async function onDrop(block: Block, e: DragEvent) {
 .menu-item.danger { color: var(--danger); }
 .menu-item.danger:hover { background: rgba(163, 51, 39, 0.08); color: var(--danger); }
 
-/* 富内容与摘要：与任务文本左对齐（内容块已改一体化头部栏，无需大留白） */
-.row-rich { padding-left: 50px; padding-top: 4px; overflow: visible; }
+/* 内容块在行内占满剩余宽度（与正文左对齐，随窗口缩放） */
+.row-rich { flex: 1; min-width: 0; margin: 3px 0; overflow: visible; }
 .row-summary {
   color: var(--muted);
   font-size: 0.85rem;
