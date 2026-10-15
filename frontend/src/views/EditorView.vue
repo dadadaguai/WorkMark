@@ -493,7 +493,24 @@ const slashItems = computed<SlashItem[]>(() => {
   templates.value.forEach((t, i) =>
     base.push({ key: 'tpl-' + i, label: t.name, desc: '插入模板内容', icon: '▤', tplIndex: i }),
   )
+  // 按 '/' 后输入的文字过滤（匹配 key / label / desc，不区分大小写），回车即选中匹配项
+  const m = slashMenu.value
+  if (m) {
+    const block = blocks.value.find(b => b.id === m.blockId)
+    const query = (block?.title ?? '').slice(m.slashPos + 1).trim().toLowerCase()
+    if (query) {
+      return base.filter(it =>
+        it.key.toLowerCase().includes(query) ||
+        it.label.toLowerCase().includes(query) ||
+        (it.desc ?? '').toLowerCase().includes(query))
+    }
+  }
   return base
+})
+
+// 过滤后列表变短时，高亮索引回落在有效范围内
+watch(slashItems, list => {
+  if (slashHi.value >= list.length) slashHi.value = Math.max(0, list.length - 1)
 })
 
 function onRowInput(row: BlockRow, e: Event) {
@@ -512,6 +529,8 @@ function onRowInput(row: BlockRow, e: Event) {
     applyTitle(block.id, '')
     appendContentBlocks(block.id, [{ type: 'code', content: '', language: 'python' }])
     closeSlash()
+    // 同斜杠插入：完成后自动新建下方任务行并聚焦，可立即继续输入
+    addBlockAfter(block)
     return
   }
 
@@ -546,7 +565,8 @@ function onSlashSelect(item: SlashItem) {
   } else if (item.type) {
     appendContentBlocks(block.id, [makeDefaultContent(item.type)])
   }
-  focusRow(block.id, m.slashPos)
+  // 插入内容块后自动在下方新建任务行并聚焦，光标无缝衔接（可立即继续输入）
+  addBlockAfter(block)
 }
 
 // ── 行键盘行为 ──
@@ -560,7 +580,11 @@ function onRowKeydown(row: BlockRow, e: KeyboardEvent) {
   if (slashMenu.value && slashMenu.value.blockId === block.id && slashItems.value.length) {
     if (e.key === 'ArrowDown') { e.preventDefault(); slashHi.value = (slashHi.value + 1) % slashItems.value.length; return }
     if (e.key === 'ArrowUp') { e.preventDefault(); slashHi.value = (slashHi.value - 1 + slashItems.value.length) % slashItems.value.length; return }
-    if (e.key === 'Enter') { e.preventDefault(); onSlashSelect(slashItems.value[slashHi.value]); return }
+    if (e.key === 'Enter') {
+      e.preventDefault()
+      onSlashSelect(slashItems.value[Math.min(slashHi.value, slashItems.value.length - 1)])
+      return
+    }
     if (e.key === 'Escape') { e.preventDefault(); closeSlash(); return }
     if (e.key === ' ') { closeSlash() } // 空格关闭菜单，空格本身照常输入
   }
