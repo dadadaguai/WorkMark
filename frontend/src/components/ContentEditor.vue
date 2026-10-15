@@ -3,7 +3,7 @@
  * v-model 传 JSON 字符串（block.content），任何修改立即 emit 保存。
  * 交互对齐飞书/语雀：一体化块头部栏（非浮动胶囊，杜绝裁切）；文本块展示态无边框段落化。
  */
-import { ref, watch } from 'vue'
+import { ref, watch, nextTick } from 'vue'
 import { renderMarkdown } from '@/utils/markdown'
 import { highlight } from '@/utils/highlight'
 import { api } from '@/composables/useApi'
@@ -63,6 +63,27 @@ function setMode(i: number, m: 'edit' | 'view') {
   // 仅切换 UI 状态；mode 不持久化到 content，不触发 emit（避免无变更的幽灵保存）
   mode.value[i] = m
 }
+
+/** 文本块失焦：空块自动清理（不留"（空）"占位垃圾）；非空切回预览。 */
+function onTextBlur(i: number, item: ContentBlock) {
+  if (!item.content?.trim()) { removeItem(i); return }
+  flush()
+  setMode(i, 'view')
+}
+
+/** 尾部追加空文本块（斜杠插入后续写文字的同一入口）。 */
+function addTextBlock() {
+  items.value.push({ type: 'text', content: '' })
+  flush()
+}
+
+// 斜杠插入后追加的空文本块 → 自动进入编辑态并聚焦（v-focus 在 v-if 渲染 textarea 时聚焦）
+watch(() => items.value.length, (n, old) => {
+  const last = items.value[n - 1]
+  if (n > (old ?? 0) && last?.type === 'text' && !last.content) {
+    nextTick(() => setMode(n - 1, 'edit'))
+  }
+})
 
 // ── 折叠/展开（预览态长内容）──
 const expanded = ref<Record<number, boolean>>({})
@@ -187,7 +208,7 @@ function lineNumbers(text: string): string {
             class="ce-input ce-textarea"
             placeholder="输入文本，支持 Markdown（# 标题、**粗体**、`代码`、- 列表）..."
             @input="flush"
-            @blur="flush(); setMode(i, 'view')"
+            @blur="onTextBlur(i, item)"
           ></textarea>
           <div class="ce-edit-hint">失焦自动切回预览 · 支持 Markdown</div>
         </div>
@@ -304,6 +325,9 @@ function lineNumbers(text: string): string {
         </div>
       </template>
     </div>
+
+    <!-- 尾部追加入口：hover 浮现，代码块之后想补文字无需再敲斜杠 -->
+    <button v-if="items.length > 0" class="ce-add ce-add-text" @click="addTextBlock">＋ 文本</button>
 
     <!-- 图片放大遮罩 -->
     <div v-if="zoomSrc" class="ce-zoom" @click="zoomSrc = null">
@@ -510,6 +534,8 @@ function lineNumbers(text: string): string {
   cursor: pointer;
 }
 .ce-add:hover { color: var(--accent); background: var(--accent-light); }
+.ce-add-text { opacity: 0; transition: opacity 0.15s, color 0.15s, background 0.15s; }
+.content-editor:hover .ce-add-text { opacity: 1; }
 
 /* 表格 */
 .ce-table { border-collapse: collapse; width: 100%; }

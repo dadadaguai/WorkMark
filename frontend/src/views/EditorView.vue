@@ -598,8 +598,8 @@ function onRowInput(row: BlockRow, e: Event) {
     applyTitle(block.id, '')
     appendContentBlocks(block.id, [{ type: 'code', content: '', language: 'python' }])
     closeSlash()
-    // 同斜杠插入：完成后自动新建下方任务行并聚焦，可立即继续输入
-    addBlockAfter(block)
+    // 同任务内追加空文本块续写文字（ContentEditor 检测到后自动进入编辑态聚焦）
+    appendContentBlocks(block.id, [makeDefaultContent('text')])
     return
   }
 
@@ -634,8 +634,9 @@ function onSlashSelect(item: SlashItem) {
   } else if (item.type) {
     appendContentBlocks(block.id, [makeDefaultContent(item.type)])
   }
-  // 插入内容块后自动在下方新建任务行并聚焦，光标无缝衔接（可立即继续输入）
-  addBlockAfter(block)
+  // 插入后同任务内追加空文本块续写文字（ContentEditor 检测到后自动进入编辑态聚焦），
+  // 想开新任务则 hover 行点「＋ 在此后新建任务」或聚焦任务行后回车
+  appendContentBlocks(block.id, [makeDefaultContent('text')])
 }
 
 // ── 行键盘行为 ──
@@ -827,8 +828,26 @@ async function confirmDeleteBlock() {
   if (!deleteTarget.value) return
   const { block } = deleteTarget.value
   deleteTarget.value = null
+  // 焦点落点：保留子块 → 第一个子块（它会上移到被删位置）；否则跳过被删块及其后代取下一行，再退回上一行
+  const kidsIds = new Set(childrenOf(block.id).map(k => k.id))
+  let target: number | null = keepChildren.value && kidsIds.size ? [...kidsIds][0] : null
+  if (target === null) {
+    const rows = flatRows.value
+    const idx = rows.findIndex(r => r.kind === 'block' && r.block.id === block.id)
+    for (let j = idx + 1; j < rows.length; j++) {
+      const r = rows[j]
+      if (r.kind === 'block' && !kidsIds.has(r.block.id)) { target = r.block.id; break }
+    }
+    if (target === null) {
+      for (let j = idx - 1; j >= 0; j--) {
+        const r = rows[j]
+        if (r.kind === 'block') { target = r.block.id; break }
+      }
+    }
+  }
   await api.del(`/blocks/${realIdOf(block.id)}${keepChildren.value ? '?keep_children=1' : ''}`)
   await reloadBlocks()
+  if (target !== null) focusRow(target, 'end')
 }
 
 async function copyBlock(block: Block) {
