@@ -64,11 +64,18 @@ function setMode(i: number, m: 'edit' | 'view') {
   mode.value[i] = m
 }
 
-/** 文本块失焦：空块自动清理（不留"（空）"占位垃圾）；非空切回预览。 */
-function onTextBlur(i: number, item: ContentBlock) {
-  if (!item.content?.trim()) { removeItem(i); return }
+/** 文本块失焦：切回预览。空块保留为可点击续写行（不自动清理，续写位置不消失）。 */
+function onTextBlur(i: number) {
   flush()
   setMode(i, 'view')
+}
+
+/** 文本编辑区随内容自动长高（无缝文档流，不出现滚动条）。 */
+function autoGrowText(el: EventTarget | null) {
+  const ta = el as HTMLTextAreaElement
+  if (!ta) return
+  ta.style.height = 'auto'
+  ta.style.height = ta.scrollHeight + 'px'
 }
 
 /** 尾部追加空文本块（斜杠插入后续写文字的同一入口）。 */
@@ -190,7 +197,7 @@ function lineNumbers(text: string): string {
             v-html="renderMarkdown(item.content)"
             @click="setMode(i, 'edit')"
           ></div>
-          <div v-else class="ce-placeholder" @click="setMode(i, 'edit')">（空，点击输入文本，支持 Markdown）</div>
+          <div v-else class="ce-placeholder" @click="setMode(i, 'edit')">输入文字…</div>
           <!-- hover 悬浮操作（在块内部，不外溢不裁切） -->
           <div class="ce-text-ops" @mousedown.prevent>
             <button class="ce-op" :title="copied[i] ? '已复制' : '复制'" @click="copyText(i, item.content || '')">⧉</button>
@@ -206,11 +213,11 @@ function lineNumbers(text: string): string {
             v-model="item.content"
             v-focus
             class="ce-input ce-textarea"
-            placeholder="输入文本，支持 Markdown（# 标题、**粗体**、`代码`、- 列表）..."
-            @input="flush"
-            @blur="onTextBlur(i, item)"
+            placeholder="输入文字…"
+            @focus="autoGrowText($event.target)"
+            @input="autoGrowText($event.target); flush"
+            @blur="onTextBlur(i)"
           ></textarea>
-          <div class="ce-edit-hint">失焦自动切回预览 · 支持 Markdown</div>
         </div>
       </template>
 
@@ -427,7 +434,16 @@ function lineNumbers(text: string): string {
   width: 100%;
 }
 .ce-input:focus { box-shadow: none; }
-.ce-textarea { width: 100%; min-height: 70px; resize: vertical; box-sizing: border-box; }
+
+/* 文本块编辑态：无缝正文——无边框无底色无提示，排版与展示态完全一致（飞书式续写） */
+.ce-text-edit { background: transparent; border: none; border-radius: 0; box-shadow: none; overflow: visible; }
+.ce-textarea {
+  width: 100%; min-height: 28px; resize: none; box-sizing: border-box;
+  border: none; background: transparent; border-radius: 0;
+  padding: 4px 8px; font: inherit; font-size: 0.92rem; line-height: 1.7;
+  color: var(--fg); overflow: hidden;
+}
+.ce-textarea::placeholder { color: var(--faint); }
 .mono { font-family: var(--font-mono); font-size: 0.84rem; }
 .shell-input { background: #1f232a; color: #9ece6a; }
 
@@ -460,15 +476,8 @@ function lineNumbers(text: string): string {
 .ce-text-view:hover .ce-text-ops { opacity: 1; }
 .ce-text-ops .ce-op { padding: 2px 7px; }
 
-/* 文本块编辑态：朱砂细环聚焦框 */
-.ce-text-edit {
-  border: 1px solid var(--accent-line);
-  border-radius: var(--radius-lg);
-  background: var(--bg);
-  box-shadow: 0 0 0 3px rgba(181, 68, 44, 0.06);
-  overflow: hidden;
-}
-.ce-edit-hint { font-size: 11px; color: var(--faint); padding: 0 12px 8px; }
+/* 文本块编辑态：无边框，仅信任光标（排版与展示态一致，切换不跳动） */
+.ce-edit-hint { display: none; }
 
 /* Markdown 渲染 */
 .md-render :deep(p) { margin: 4px 0; white-space: pre-wrap; word-break: break-word; }
