@@ -87,7 +87,75 @@ function focusBlock(blockId: number) {
 }
 
 async function reloadBlocks() {
-  blocks.value = await api.get<Block[]>(`/blocks/document/${props.id}`)
+  await awaitPendingCreates()
+  const list = await api.get<Block[]>(`/blocks/document/${props.id}`)
+  // 合并未落盘的本地编辑（防抖窗口内的输入，含临时负 id 键），防止整表刷新吞字
+  for (const [key, pu] of pendingUpdates) {
+    const target = list.find(b => b.id === realIdOf(key))
+    if (target) Object.assign(target, pu)
+  }
+  blocks.value = list
+}
+
+// ── 乐观块创建（飞书式）：本地立即成行并聚焦，后台落库 ──
+// 临时块用负数 id 且永不改动（充当稳定 Vue key，行不重挂载、焦点不丢），tempToReal 提供真实 id 映射。
+let tempIdSeq = -1
+const pendingCreates = new Map<number, Promise<void>>() // tempId -> 落库完成信号
+const tempToReal = new Map<number, number>()
+
+/** 结构/删除/复制/拖拽等操作前调用：等所有临时块落库完成，保证拿到真实 id。 */
+async function awaitPendingCreates() {
+  while (pendingCreates.size) await Promise.all([...pendingCreates.values()])
+}
+
+/** 若块是尚未落库的临时块，等待其落库完成。 */
+async function ensureBlockPersisted(block: Block) {
+  const p = pendingCreates.get(block.id)
+  if (p) await p
+}
+
+/** 本地 id → 服务端真实 id（非临时块原样返回）。 */
+function realIdOf(id: number): number {
+  return tempToReal.get(id) ?? id
+}
+
+/** 本地立即创建块并返回（零延迟可输入/聚焦）；后台 POST 落库，失败移除本地行。 */
+function createBlockOptimistic(after: Block | null, parentId: number | null, title: string): Block {
+  const tempId = tempIdSeq--
+  const temp: Block = {
+    id: tempId,
+    document_id: Number(props.id),
+    parent_id: parentId,
+    title,
+    content: '[]',
+    sort_order: after ? after.sort_order + 0.5 : Number.MAX_SAFE_INTEGER / 2,
+    work_start_time: null,
+    work_end_time: null,
+    created_at: new Date().toISOString().slice(0, 19),
+    updated_at: '',
+  }
+  blocks.value.push(temp)
+  const p = (async () => {
+    try {
+      const nb = await api.post<Block>('/blocks', {
+        document_id: Number(props.id),
+        parent_id: parentId,
+        after_id: after ? realIdOf(after.id) : undefined,
+        title,
+        content: '[]',
+      })
+      tempToReal.set(tempId, nb.id)
+      temp.sort_order = nb.sort_order // 仅同步排序；id 保持本地键，避免整行重挂载
+    } catch (err) {
+      console.warn('块创建失败，移除本地临时行', err)
+      pendingUpdates.delete(tempId)
+      blocks.value = blocks.value.filter(b => b.id !== tempId)
+    } finally {
+      pendingCreates.delete(tempId)
+    }
+  })()
+  pendingCreates.set(tempId, p)
+  return temp
 }
 
 // ── 时间轴：排序模式 + 平铺/折叠视图 + 工作时段分组（FR-04）──
@@ -275,13 +343,14 @@ function scheduleFlush() {
 
 async function flushSaves(): Promise<void> {
   if (saveTimer !== null) { clearTimeout(saveTimer); saveTimer = null }
+  await awaitPendingCreates() // 临时块先落库，映射出真实 id 再 PUT
   if (pendingUpdates.size === 0) return
   const entries = [...pendingUpdates.entries()]
   pendingUpdates.clear()
   setSaveState('saving')
   try {
     for (const [id, data] of entries) {
-      await api.put(`/blocks/${id}`, data)
+      await api.put(`/blocks/${realIdOf(id)}`, data)
     }
     setSaveState('saved')
   } catch {
@@ -612,9 +681,12 @@ function onRowKeydown(row: BlockRow, e: KeyboardEvent) {
   }
 }
 
-/** Enter：光标处拆分，tail 移入新块（同级插入当前块之后，当前块的子块不受影响）。 */
+/** Enter：光标处拆分，tail 移入新块（乐观插入：本地立即成行，后台落库）。 */
 async function splitRowAtCursor(row: BlockRow, ta: HTMLTextAreaElement) {
   const block = row.block
+  // 当前块若为临时块（极快连续回车），先落库保证 after_id / 拆分语义正确
+  await ensureBlockPersisted(block)
+  if (!blocks.value.some(b => b.id === block.id)) return // 落库失败行已移除
   const pos = ta.selectionStart ?? 0
   const text = block.title ?? ''
   const head = text.slice(0, pos)
@@ -628,29 +700,8 @@ async function splitRowAtCursor(row: BlockRow, ta: HTMLTextAreaElement) {
 
   recordBlockChange(block.id, 'title', text, head)
   applyTitle(block.id, head)
-  try {
-    const nb = await api.post<Block>('/blocks', {
-      document_id: Number(props.id),
-      parent_id: block.parent_id,
-      after_id: block.id,
-      title: tail,
-      content: '[]',
-    })
-    // 中间插入会平移兄弟块 sort_order，需重新拉取以保持本地顺序一致
-    await reloadBlocks()
-    focusRow(nb.id, 'start')
-  } catch (err) {
-    // after_id 竞态等失败：回退为末尾追加
-    console.warn('after_id 插入失败，回退追加', err)
-    const nb = await api.post<Block>('/blocks', {
-      document_id: Number(props.id),
-      parent_id: block.parent_id,
-      title: tail,
-      content: '[]',
-    })
-    blocks.value.push(nb)
-    focusRow(nb.id, 'start')
-  }
+  const nb = createBlockOptimistic(block, block.parent_id, tail)
+  focusRow(nb.id, 'start')
 }
 
 /** Shift+Enter：任务内软换行。 */
@@ -663,51 +714,27 @@ function insertNewlineAtCursor(row: BlockRow, ta: HTMLTextAreaElement) {
   focusRow(row.block.id, pos + 1)
 }
 
-/** 在当前块之后新建同级空任务块并聚焦（富内容下方的"新建任务"入口）。 */
+/** 在当前块之后新建同级空任务块并聚焦（乐观插入，零延迟可输入）。 */
 async function addBlockAfter(block: Block) {
-  try {
-    const nb = await api.post<Block>('/blocks', {
-      document_id: Number(props.id),
-      parent_id: block.parent_id,
-      after_id: block.id,
-      title: '',
-      content: '[]',
-    })
-    await reloadBlocks()
-    focusRow(nb.id, 'start')
-  } catch {
-    const nb = await api.post<Block>('/blocks', {
-      document_id: Number(props.id),
-      parent_id: block.parent_id,
-      title: '',
-      content: '[]',
-    })
-    blocks.value.push(nb)
-    focusRow(nb.id, 'start')
-  }
+  await ensureBlockPersisted(block)
+  if (!blocks.value.some(b => b.id === block.id)) return // 落库失败行已移除
+  const nb = createBlockOptimistic(block, block.parent_id, '')
+  focusRow(nb.id, 'start')
 }
 
 /** 为当前块新建一个子块（parent_id = 当前块）并聚焦。 */
 async function addChildBlock(block: Block) {
   if (block.parent_id !== null) return // 仅顶层块可作为父
-  try {
-    const nb = await api.post<Block>('/blocks', {
-      document_id: Number(props.id),
-      parent_id: block.id,
-      title: '',
-      content: '[]',
-    })
-    await reloadBlocks()
-    if (!expandedIds.value.has(block.id)) toggleExpand(block.id)
-    focusRow(nb.id, 'start')
-  } catch {
-    // 后端可能要求父块无子块时才能建子块，回退为同级
-    await addBlockAfter(block)
-  }
+  await ensureBlockPersisted(block)
+  if (!blocks.value.some(b => b.id === block.id)) return
+  const nb = createBlockOptimistic(null, realIdOf(block.id), '') // parent 需服务端真实 id
+  if (!expandedIds.value.has(block.id)) toggleExpand(block.id)
+  focusRow(nb.id, 'start')
 }
 
 /** Tab：顶层块变为前一个顶层兄弟的子块（排其子块末尾）。 */
 async function indentBlock(row: BlockRow) {
+  await awaitPendingCreates() // reorder 需要服务端真实 id
   const block = row.block
   if (row.depth !== 0) return
   const tops = blocks.value.filter(b => b.parent_id === null).sort(byOrder)
@@ -716,10 +743,10 @@ async function indentBlock(row: BlockRow) {
   if (childrenOf(block.id).length > 0) return // 自身有子块：后端要求父级必须是顶层块
   const target = tops[idx - 1]
   const updates: { id: number; parent_id: number | null; sort_order: number }[] = []
-  tops.filter(b => b.id !== block.id).forEach((b, i) => updates.push({ id: b.id, parent_id: null, sort_order: i }))
+  tops.filter(b => b.id !== block.id).forEach((b, i) => updates.push({ id: realIdOf(b.id), parent_id: null, sort_order: i }))
   const sibs = blocks.value.filter(b => b.parent_id === target.id).sort(byOrder)
-  sibs.forEach((c, i) => updates.push({ id: c.id, parent_id: target.id, sort_order: i }))
-  updates.push({ id: block.id, parent_id: target.id, sort_order: sibs.length })
+  sibs.forEach((c, i) => updates.push({ id: realIdOf(c.id), parent_id: realIdOf(target.id), sort_order: i }))
+  updates.push({ id: realIdOf(block.id), parent_id: realIdOf(target.id), sort_order: sibs.length })
   await api.post('/blocks/reorder', { updates })
   await reloadBlocks()
   focusRow(block.id, 'end')
@@ -727,18 +754,19 @@ async function indentBlock(row: BlockRow) {
 
 /** Shift+Tab：子块升回顶层，插到父块之后。 */
 async function outdentBlock(row: BlockRow) {
+  await awaitPendingCreates()
   const block = row.block
   if (row.depth !== 1 || block.parent_id === null) return
   const parent = blocks.value.find(b => b.id === block.parent_id)
   if (!parent) return
   const updates: { id: number; parent_id: number | null; sort_order: number }[] = []
   const sibs = blocks.value.filter(b => b.parent_id === parent.id && b.id !== block.id).sort(byOrder)
-  sibs.forEach((c, i) => updates.push({ id: c.id, parent_id: parent.id, sort_order: i }))
+  sibs.forEach((c, i) => updates.push({ id: realIdOf(c.id), parent_id: realIdOf(parent.id), sort_order: i }))
   const tops = blocks.value.filter(b => b.parent_id === null && b.id !== block.id).sort(byOrder)
   const pIdx = tops.findIndex(b => b.id === parent.id)
   if (pIdx === -1) return
   tops.splice(pIdx + 1, 0, block)
-  tops.forEach((b, i) => updates.push({ id: b.id, parent_id: null, sort_order: i }))
+  tops.forEach((b, i) => updates.push({ id: realIdOf(b.id), parent_id: null, sort_order: i }))
   await api.post('/blocks/reorder', { updates })
   await reloadBlocks()
   focusRow(block.id, 'end')
@@ -751,9 +779,10 @@ async function maybeDeleteEmptyRow(row: BlockRow, e: KeyboardEvent) {
   if (childrenOf(block.id).length > 0) return // 有子块不删
   e.preventDefault()
   const prev = neighborRowId(block.id, -1)
+  await ensureBlockPersisted(block) // 临时块先落库，删除才能打到服务端真实块
   pendingUpdates.delete(block.id) // 防止队列残留更新打到已删块
   try {
-    await api.del(`/blocks/${block.id}`)
+    await api.del(`/blocks/${realIdOf(block.id)}`)
   } catch {
     return
   }
@@ -798,12 +827,12 @@ async function confirmDeleteBlock() {
   if (!deleteTarget.value) return
   const { block } = deleteTarget.value
   deleteTarget.value = null
-  await api.del(`/blocks/${block.id}${keepChildren.value ? '?keep_children=1' : ''}`)
+  await api.del(`/blocks/${realIdOf(block.id)}${keepChildren.value ? '?keep_children=1' : ''}`)
   await reloadBlocks()
 }
 
 async function copyBlock(block: Block) {
-  await api.post(`/blocks/${block.id}/copy`)
+  await api.post(`/blocks/${realIdOf(block.id)}/copy`)
   await reloadBlocks()
 }
 
@@ -887,6 +916,7 @@ async function onDrop(block: Block, e: DragEvent) {
   if (dragged.id === block.id) return
   if (dragged.parent_id === null && block.parent_id !== null) return
   if (hint.zone === 'child' && childrenOf(dragged.id).length > 0) return
+  await awaitPendingCreates() // reorder 需要服务端真实 id
 
   type Upd = { id: number; parent_id: number | null; sort_order: number }
   const updates: Upd[] = []
@@ -894,10 +924,10 @@ async function onDrop(block: Block, e: DragEvent) {
   if (hint.zone === 'child') {
     // 顶层块 → 另一顶层块的子块（追加到末尾）
     const oldTop = blocks.value.filter(b => b.parent_id === null && b.id !== dragged.id).sort(byOrder)
-    oldTop.forEach((b, i) => updates.push({ id: b.id, parent_id: null, sort_order: i }))
+    oldTop.forEach((b, i) => updates.push({ id: realIdOf(b.id), parent_id: null, sort_order: i }))
     const newChildren = blocks.value.filter(b => b.parent_id === block.id).sort(byOrder)
-    newChildren.forEach((c, i) => updates.push({ id: c.id, parent_id: block.id, sort_order: i }))
-    updates.push({ id: dragged.id, parent_id: block.id, sort_order: newChildren.length })
+    newChildren.forEach((c, i) => updates.push({ id: realIdOf(c.id), parent_id: realIdOf(block.id), sort_order: i }))
+    updates.push({ id: realIdOf(dragged.id), parent_id: realIdOf(block.id), sort_order: newChildren.length })
   } else {
     const newParent = block.parent_id
     if (dragged.parent_id !== newParent) {
@@ -905,7 +935,7 @@ async function onDrop(block: Block, e: DragEvent) {
       const oldSiblings = blocks.value
         .filter(b => b.parent_id === dragged.parent_id && b.id !== dragged.id)
         .sort(byOrder)
-      oldSiblings.forEach((b, i) => updates.push({ id: b.id, parent_id: dragged.parent_id, sort_order: i }))
+      oldSiblings.forEach((b, i) => updates.push({ id: realIdOf(b.id), parent_id: dragged.parent_id, sort_order: i }))
     }
     // 目标序列中插入到目标块前/后
     const seq = blocks.value
@@ -914,7 +944,7 @@ async function onDrop(block: Block, e: DragEvent) {
     const idx = seq.findIndex(b => b.id === block.id)
     if (idx === -1) return
     seq.splice(hint.zone === 'before' ? idx : idx + 1, 0, dragged)
-    seq.forEach((b, i) => updates.push({ id: b.id, parent_id: newParent, sort_order: i }))
+    seq.forEach((b, i) => updates.push({ id: realIdOf(b.id), parent_id: newParent, sort_order: i }))
   }
 
   await api.post('/blocks/reorder', { updates })
