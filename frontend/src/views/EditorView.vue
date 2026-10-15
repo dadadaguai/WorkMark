@@ -634,8 +634,7 @@ function onSlashSelect(item: SlashItem) {
   } else if (item.type) {
     appendContentBlocks(block.id, [makeDefaultContent(item.type)])
   }
-  // 插入后同任务内追加空文本块续写文字（ContentEditor 检测到后自动进入编辑态聚焦），
-  // 想开新任务则 hover 行点「＋ 在此后新建任务」或聚焦任务行后回车
+  // 插入后同任务内追加空文本块续写（排版与任务输入行一致，回车新建下一行任务）
   appendContentBlocks(block.id, [makeDefaultContent('text')])
 }
 
@@ -721,6 +720,11 @@ async function addBlockAfter(block: Block) {
   if (!blocks.value.some(b => b.id === block.id)) return // 落库失败行已移除
   const nb = createBlockOptimistic(block, block.parent_id, '')
   focusRow(nb.id, 'start')
+}
+
+/** 内容续写区回车：与文档任务行行为一致——新建下一行任务。 */
+async function onContentEnter(block: Block) {
+  await addBlockAfter(block)
 }
 
 /** 为当前块新建一个子块（parent_id = 当前块）并聚焦。 */
@@ -1097,6 +1101,7 @@ async function onDrop(block: Block, e: DragEvent) {
             :model-value="row.block.content"
             :block-id="row.block.id"
             @update:model-value="updateBlockContent(row.block, $event)"
+            @enter="onContentEnter(row.block)"
           />
           <div
             v-else-if="!isExpanded(row.block.id)"

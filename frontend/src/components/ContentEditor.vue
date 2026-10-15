@@ -10,7 +10,7 @@ import { api } from '@/composables/useApi'
 import type { ContentBlock } from '@/types'
 
 const props = defineProps<{ modelValue: string; blockId?: number }>()
-const emit = defineEmits<{ 'update:modelValue': [string] }>()
+const emit = defineEmits<{ 'update:modelValue': [string]; enter: [] }>()
 
 const items = ref<ContentBlock[]>(parse(props.modelValue))
 
@@ -82,6 +82,14 @@ function autoGrowText(el: EventTarget | null) {
 function addTextBlock() {
   items.value.push({ type: 'text', content: '' })
   flush()
+}
+
+/** 续写区回车：与文档任务行行为一致——新建下一行任务；Shift+Enter 才是软换行。 */
+function onTextEnter(e: KeyboardEvent) {
+  if (e.shiftKey || e.isComposing) return
+  e.preventDefault()
+  flush()
+  emit('enter')
 }
 
 // 斜杠插入后追加的空文本块 → 自动进入编辑态并聚焦（v-focus 在 v-if 渲染 textarea 时聚焦）
@@ -216,6 +224,7 @@ function lineNumbers(text: string): string {
             placeholder="输入文字…"
             @focus="autoGrowText($event.target)"
             @input="autoGrowText($event.target); flush"
+            @keydown.enter="onTextEnter($event)"
             @blur="onTextBlur(i)"
           ></textarea>
         </div>
@@ -435,15 +444,16 @@ function lineNumbers(text: string): string {
 }
 .ce-input:focus { box-shadow: none; }
 
-/* 文本块编辑态：无缝正文——无边框无底色无提示，排版与展示态完全一致（飞书式续写） */
+/* 文本块编辑态＝任务输入行同款：与 .row-input 排版逐字对齐（前后一致的文档流） */
 .ce-text-edit { background: transparent; border: none; border-radius: 0; box-shadow: none; overflow: visible; }
 .ce-textarea {
   width: 100%; min-height: 28px; resize: none; box-sizing: border-box;
-  border: none; background: transparent; border-radius: 0;
-  padding: 4px 8px; font: inherit; font-size: 0.92rem; line-height: 1.7;
+  border: none; outline: none; background: transparent; border-radius: 4px;
+  padding: 5px 2px; font-family: inherit; font-size: 15px; line-height: 1.75;
   color: var(--fg); overflow: hidden;
+  field-sizing: content;
 }
-.ce-textarea::placeholder { color: var(--faint); }
+.ce-textarea::placeholder { color: #c9cdd1; }
 .mono { font-family: var(--font-mono); font-size: 0.84rem; }
 .shell-input { background: #1f232a; color: #9ece6a; }
 
@@ -451,10 +461,10 @@ function lineNumbers(text: string): string {
 .ce-item.ce-plain { border: none; background: transparent; }
 .ce-text-view { position: relative; border-radius: var(--radius); }
 .ce-text-view:hover { background: var(--bg-hover); }
-.ce-preview { cursor: text; min-height: 24px; padding: 4px 8px; border-radius: var(--radius); }
+.ce-preview { cursor: text; min-height: 24px; padding: 5px 2px; border-radius: var(--radius); font-size: 15px; }
 .ce-placeholder {
-  color: var(--faint); font-size: 0.85rem; cursor: text;
-  padding: 8px 8px; min-height: 24px; border-radius: var(--radius);
+  color: #c9cdd1; font-size: 15px; cursor: text;
+  padding: 5px 2px; min-height: 24px; border-radius: var(--radius);
 }
 .ce-preview.collapsed { max-height: 300px; overflow: hidden; }
 
