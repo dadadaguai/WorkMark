@@ -143,6 +143,8 @@ function createBlockOptimistic(after: Block | null, parentId: number | null, tit
   blocks.value.push(temp)
   const p = (async () => {
     try {
+      // after 可能是尚未落库的临时块（如连续插入内容块 + 续写行），先等其落库拿到真实 id，否则后端会因 after_id 不存在而拒绝创建
+      if (after) await ensureBlockPersisted(after)
       const nb = await api.post<Block>('/blocks', {
         document_id: Number(props.id),
         parent_id: parentId,

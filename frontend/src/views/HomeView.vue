@@ -40,10 +40,31 @@ const moveableFolders = computed(() => {
   return store.folders
 })
 
+/** 返回 folder_id 及其全部子孙文件夹 id（用于移动时排除，避免循环嵌套）。 */
+function folderDescendants(id: number): Set<number> {
+  const excluded = new Set<number>()
+  let frontier = [id]
+  while (frontier.length) {
+    const next: number[] = []
+    for (const pid of frontier) {
+      for (const f of store.folders) {
+        if (f.parent_id === pid && !excluded.has(f.id)) {
+          excluded.add(f.id)
+          next.push(f.id)
+        }
+      }
+    }
+    frontier = next
+  }
+  return excluded
+}
+
 const folderMoveTargets = computed(() => {
   if (!moveFolderTarget.value) return []
-  // 排除自身
-  return store.folders.filter(f => f.id !== moveFolderTarget.value!.id)
+  // 排除自身及其整个子树（否则会把文件夹移进自己的子孙，形成循环）
+  const excluded = folderDescendants(moveFolderTarget.value.id)
+  excluded.add(moveFolderTarget.value.id)
+  return store.folders.filter(f => !excluded.has(f.id))
 })
 
 onMounted(async () => {

@@ -31,6 +31,21 @@ def create_folder():
     return jsonify(dict(row)), 201
 
 
+def _descendant_folder_ids(folder_id) -> set:
+    """返回 folder_id 的所有后代文件夹 id（含自身），用于循环引用校验。"""
+    ids = {folder_id}
+    frontier = [folder_id]
+    while frontier:
+        nxt = []
+        for pid in frontier:
+            for r in g.db.execute("SELECT id FROM folders WHERE parent_id = ?", (pid,)).fetchall():
+                if r["id"] not in ids:
+                    ids.add(r["id"])
+                    nxt.append(r["id"])
+        frontier = nxt
+    return ids
+
+
 @bp.put("/<int:folder_id>")
 def update_folder(folder_id):
     row = g.db.execute("SELECT * FROM folders WHERE id = ?", (folder_id,)).fetchone()
@@ -40,6 +55,17 @@ def update_folder(folder_id):
     body = request.get_json(force=True)
     if row["is_default"] and body.get("name"):
         return jsonify({"error": "默认文件夹不可重命名"}), 400
+
+    # 移动前校验目标父文件夹：不能是自身或其子孙（否则形成循环嵌套）
+    if "parent_id" in body and body["parent_id"] is not None:
+        pid = body["parent_id"]
+        if pid == folder_id:
+            return jsonify({"error": "文件夹不能移动到自身"}), 400
+        parent = g.db.execute("SELECT id FROM folders WHERE id = ?", (pid,)).fetchone()
+        if parent is None:
+            return jsonify({"error": "目标父文件夹不存在"}), 404
+        if pid in _descendant_folder_ids(folder_id):
+            return jsonify({"error": "不能移动到自身或子孙文件夹下"}), 400
 
     fields, values = [], []
     for f in ("name", "parent_id", "sort_order"):

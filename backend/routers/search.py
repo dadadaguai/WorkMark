@@ -62,6 +62,21 @@ def _match_all(haystacks: list, terms: list[str]) -> bool:
     return all(any(t.lower() in h for h in lowers) for t in terms)
 
 
+def _content_type_label(content: str) -> str:
+    """content 行（title 为空）的类型化标题，与编辑器摘要一致。"""
+    try:
+        arr = json.loads(content or "[]")
+        it = arr[0] if isinstance(arr, list) and arr else None
+        if isinstance(it, dict):
+            return {
+                "code": "代码", "shell": "命令", "output": "输出",
+                "todo": "待办", "table": "表格", "image": "图片",
+            }.get(it.get("type"), "内容块")
+    except (ValueError, TypeError):
+        pass
+    return "内容块"
+
+
 @bp.get("")
 def search():
     """全文搜索：块标题 + 块内容 + 文档名。
@@ -99,7 +114,7 @@ def search():
             "block_id": r["id"],
             "document_id": r["document_id"],
             "document_name": doc_names.get(r["document_id"], ""),
-            "block_title": (r["title"] or "").splitlines()[0][:60] if r["title"] else "内容块",
+            "block_title": (r["title"] or "").splitlines()[0][:60] if r["title"] else _content_type_label(r["content"]),
             "is_sub": r["parent_id"] is not None,
             "created_at": r["created_at"],
             "work_start_time": r["work_start_time"],
