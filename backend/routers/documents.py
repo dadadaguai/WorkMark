@@ -63,6 +63,11 @@ def create_document():
         if row is None:
             return jsonify({"error": "默认文件夹不存在"}), 500
         fid = row["id"]
+    else:
+        # 指定的文件夹必须存在（否则外键约束触发 500，改为明确 404）
+        row = g.db.execute("SELECT id FROM folders WHERE id = ?", (fid,)).fetchone()
+        if row is None:
+            return jsonify({"error": "文件夹不存在"}), 404
 
     name = body.get("name")
     if not name:
