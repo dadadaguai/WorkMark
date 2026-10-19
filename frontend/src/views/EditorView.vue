@@ -11,6 +11,7 @@ import ContentEditor from '@/components/ContentEditor.vue'
 import SlashMenu from '@/components/SlashMenu.vue'
 import ConfirmDialog from '@/components/ConfirmDialog.vue'
 import PromptDialog from '@/components/PromptDialog.vue'
+import { useDialogFocus } from '@/composables/useDialogFocus'
 import type { Document, Block, ContentBlock, SlashItem } from '@/types'
 
 const props = defineProps<{ id: string }>()
@@ -431,10 +432,20 @@ function scheduleFlush() {
 // 单一串行保存循环：避免保存顺序交错，失败时不投弃队列、不覆盖用户新输入
 let saveBusy = false
 let rerunRequested = false
+let saveWaiters: (() => void)[] = []
+
+/** 是否存在尚未落库的本地内容（块更新 / 文档标题 / 创建中 / 创建失败）。 */
+function hasUnsavedChanges(): boolean {
+  return pendingUpdates.size > 0 || docPending.value !== null || pendingCreates.size > 0 || failedCreates.value.size > 0
+}
 
 async function flushSaves(): Promise<void> {
   if (saveTimer !== null) { clearTimeout(saveTimer); saveTimer = null }
-  if (saveBusy) { rerunRequested = true; return }
+  if (saveBusy) {
+    // 保存进行中：置重新执行标记，等待本轮循环（含重跑）真正结束才返回
+    rerunRequested = true
+    return new Promise<void>(resolve => saveWaiters.push(resolve))
+  }
   saveBusy = true
   let didSave = false
   let failed = false
@@ -469,13 +480,21 @@ async function flushSaves(): Promise<void> {
         }
       }
       if (failed) break
+
+      // 队列里若只剩创建失败的块（无法通过 PUT 保存），退出循环等待 retryCreate，避免死循环
+      const savable = [...pendingUpdates.keys()].some(id => !failedCreates.value.has(id))
+      if (!savable && !docPending.value) break
     } while (rerunRequested || pendingUpdates.size > 0 || docPending.value)
 
     if (failed) setSaveState('error')
+    else if (failedCreates.value.size > 0) setSaveState('error')
     else if (docPending.value || pendingUpdates.size > 0) setSaveState('pending')
     else if (didSave) setSaveState('saved')
   } finally {
     saveBusy = false
+    const ws = saveWaiters
+    saveWaiters = []
+    ws.forEach(r => r())
   }
 }
 
@@ -551,7 +570,7 @@ function onKeydown(e: KeyboardEvent) {
 }
 
 function onBeforeUnload(e: BeforeUnloadEvent) {
-  if (pendingUpdates.size > 0) {
+  if (hasUnsavedChanges()) {
     flushSaves()
     e.preventDefault()
     e.returnValue = ''
@@ -570,9 +589,16 @@ onUnmounted(() => {
 // 切换文档（路由离开）前：flush 保存 + 未保存守卫 + 记录停留位置（last_position）
 const lastEditedBlockId = ref<number | null>(null)
 const leaveGuard = ref<null | { resolve: (c: 'retry' | 'stay' | 'discard') => void }>(null)
+const leaveGuardRoot = ref<HTMLElement | null>(null)
+const leaveStayBtn = ref<HTMLButtonElement | null>(null)
+const { focusInitial: focusLeaveGuard } = useDialogFocus(leaveGuardRoot, () => answerLeave('stay'))
 
 function askLeave(): Promise<'retry' | 'stay' | 'discard'> {
-  return new Promise(resolve => { leaveGuard.value = { resolve } })
+  return new Promise(resolve => {
+    leaveGuard.value = { resolve }
+    // 未保存守卫：默认聚焦「留在页面」这一安全选项
+    focusLeaveGuard(els => els.find(el => el === leaveStayBtn.value) ?? els[0])
+  })
 }
 
 function answerLeave(c: 'retry' | 'stay' | 'discard') {
@@ -582,12 +608,14 @@ function answerLeave(c: 'retry' | 'stay' | 'discard') {
 
 onBeforeRouteLeave(async () => {
   await flushSaves()
-  // 仍有未保存内容（失败未落库）→ 提供 重试 / 留在页面 / 放弃 选择，而非静默丢数据
-  while (saveState.value === 'error' || pendingUpdates.size > 0 || docPending.value) {
+  // 仍有未保存内容（失败未落库 / 创建失败）→ 提供 重试 / 留在页面 / 放弃 选择，而非静默丢数据
+  while (hasUnsavedChanges()) {
     const choice = await askLeave()
     if (choice === 'discard') break
     if (choice === 'stay') return false
-    await flushSaves() // retry
+    // retry：既重试普通保存，也重试创建失败的临时块
+    await Promise.all([...failedCreates.value].map(id => retryCreate(id)))
+    await flushSaves()
   }
   if (lastEditedBlockId.value !== null) {
     try {
@@ -1362,13 +1390,13 @@ async function onDrop(block: Block, e: DragEvent) {
     />
 
     <!-- 离页未保存守卫：重试 / 留在页面 / 放弃 -->
-    <div v-if="leaveGuard" class="dialog-overlay">
+    <div v-if="leaveGuard" ref="leaveGuardRoot" class="dialog-overlay">
       <div class="dialog" role="alertdialog" aria-modal="true" aria-labelledby="leave-guard-title">
         <h3 id="leave-guard-title" class="dialog-title">有未保存的更改</h3>
         <p class="dialog-message">部分更改尚未成功保存。你可以重试保存，或放弃这些更改并离开。</p>
         <div class="dialog-actions">
           <button class="danger" @click="answerLeave('discard')">放弃更改并离开</button>
-          <button @click="answerLeave('stay')">留在页面</button>
+          <button ref="leaveStayBtn" @click="answerLeave('stay')">留在页面</button>
           <button class="primary" @click="answerLeave('retry')">重试保存</button>
         </div>
       </div>
