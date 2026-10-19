@@ -69,8 +69,11 @@ def update_folder(folder_id):
 
     fields, values = [], []
     for f in ("name", "parent_id", "sort_order"):
-        v = body.get(f)
-        if v is not None:
+        if f not in body:
+            continue
+        v = body[f]
+        # parent_id 允许显式传 null（移回根目录）；其余字段忽略 null
+        if f == "parent_id" or v is not None:
             fields.append(f"{f} = ?")
             values.append(v)
     if fields:

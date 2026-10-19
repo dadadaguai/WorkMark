@@ -100,6 +100,12 @@ async function reloadBlocks() {
     const target = list.find(b => b.id === realIdOf(key))
     if (target) Object.assign(target, pu)
   }
+  // 保留未同步（创建失败）的本地临时行，避免刷新后丢失用户输入
+  for (const tb of blocks.value) {
+    if (tb.id < 0 && failedCreates.value.has(tb.id) && !list.some(b => b.id === tb.id)) {
+      list.push(tb)
+    }
+  }
   blocks.value = list
 }
 
@@ -108,6 +114,7 @@ async function reloadBlocks() {
 let tempIdSeq = -1
 const pendingCreates = new Map<number, Promise<void>>() // tempId -> 落库完成信号
 const tempToReal = new Map<number, number>()
+const failedCreates = ref(new Set<number>()) // 创建失败但保留本地内容的临时块 id
 
 /** 结构/删除/复制/拖拽等操作前调用：等所有临时块落库完成，保证拿到真实 id。 */
 async function awaitPendingCreates() {
@@ -155,15 +162,60 @@ function createBlockOptimistic(after: Block | null, parentId: number | null, tit
       tempToReal.set(tempId, nb.id)
       temp.sort_order = nb.sort_order // 仅同步排序；id 保持本地键，避免整行重挂载
     } catch (err) {
-      console.warn('块创建失败，移除本地临时行', err)
-      pendingUpdates.delete(tempId)
-      blocks.value = blocks.value.filter(b => b.id !== tempId)
+      // 创建失败：保留本地行及用户已输入内容，标记未同步，提供重试 / 复制
+      console.warn('块创建失败，保留本地内容待重试', err)
+      failedCreates.value.add(tempId)
     } finally {
       pendingCreates.delete(tempId)
     }
   })()
   pendingCreates.set(tempId, p)
   return temp
+}
+
+/** 未同步块：用最新本地内容重新落库，成功后把 pendingUpdates 映射到真实 id 继续保存。 */
+async function retryCreate(tempId: number) {
+  const block = blocks.value.find(b => b.id === tempId)
+  if (!block) return
+  const pu = pendingUpdates.get(tempId) || {}
+  const title = pu.title ?? block.title
+  const content = pu.content ?? block.content
+  try {
+    const nb = await api.post<Block>('/blocks', {
+      document_id: Number(props.id),
+      parent_id: block.parent_id ? realIdOf(block.parent_id) : null,
+      title,
+      content,
+    })
+    tempToReal.set(tempId, nb.id)
+    block.sort_order = nb.sort_order
+    failedCreates.value.delete(tempId)
+    if (pendingUpdates.has(tempId)) {
+      const data = pendingUpdates.get(tempId)!
+      pendingUpdates.delete(tempId)
+      pendingUpdates.set(nb.id, data)
+    }
+    await flushSaves()
+  } catch {
+    // 保持未同步状态，等待下次重试
+  }
+}
+
+/** 复制未同步块正文到剪贴板（兜底，避免用户输入丢失）。 */
+async function copyUnsynced(tempId: number) {
+  const block = blocks.value.find(b => b.id === tempId)
+  const text = (block?.title ?? '').trim()
+  if (!text) return
+  try {
+    await navigator.clipboard.writeText(text)
+  } catch {
+    const ta = document.createElement('textarea')
+    ta.value = text
+    document.body.appendChild(ta)
+    ta.select()
+    document.execCommand('copy')
+    document.body.removeChild(ta)
+  }
 }
 
 // ── 时间轴：排序模式 + 平铺/折叠视图 + 工作时段分组（FR-04）──
@@ -347,37 +399,69 @@ const saveState = ref<SaveState>('idle')
 const SAVE_DELAY = 800
 let saveTimer: number | null = null
 const pendingUpdates = new Map<number, { title?: string; content?: string; work_start_time?: string | null; work_end_time?: string | null }>()
+const docPending = ref<{ name: string } | null>(null) // 文档标题待保存内容
 
 const saveStateText = computed(() => ({
-  idle: '', pending: '有未保存更改', saving: '保存中…', saved: '已保存 ✓', error: '保存失败，请重试',
+  idle: '', pending: '有未保存更改', saving: '保存中…', saved: '已保存 ✓', error: '保存失败',
 }[saveState.value]))
 
 function setSaveState(s: SaveState) { saveState.value = s }
 
 function scheduleFlush() {
-  setSaveState('pending')
+  // 进入待保存态（失败态保留，直到用户重试或继续输入）
+  if (saveState.value !== 'error') setSaveState('pending')
   if (saveTimer !== null) clearTimeout(saveTimer)
   saveTimer = window.setTimeout(flushSaves, SAVE_DELAY)
 }
 
+// 单一串行保存循环：避免保存顺序交错，失败时不投弃队列、不覆盖用户新输入
+let saveBusy = false
+let rerunRequested = false
+
 async function flushSaves(): Promise<void> {
   if (saveTimer !== null) { clearTimeout(saveTimer); saveTimer = null }
-  await awaitPendingCreates() // 临时块先落库，映射出真实 id 再 PUT
-  if (pendingUpdates.size === 0) return
-  const entries = [...pendingUpdates.entries()]
-  pendingUpdates.clear()
-  setSaveState('saving')
+  if (saveBusy) { rerunRequested = true; return }
+  saveBusy = true
+  let didSave = false
+  let failed = false
   try {
-    for (const [id, data] of entries) {
-      await api.put(`/blocks/${realIdOf(id)}`, data)
-    }
-    setSaveState('saved')
-  } catch {
-    // 失败的更新放回队列，等待下次触发
-    for (const [id, data] of entries) {
-      pendingUpdates.set(id, { ...(pendingUpdates.get(id) || {}), ...data })
-    }
-    setSaveState('error')
+    do {
+      rerunRequested = false
+      await awaitPendingCreates() // 临时块先落库，映射出真实 id 再 PUT
+
+      // 文档标题纳入统一保存流程（此前单独防抖、失败静默忽略）
+      if (docPending.value) {
+        setSaveState('saving')
+        const name = docPending.value.name
+        try {
+          await api.put(`/documents/${props.id}`, { name })
+          if (docPending.value && docPending.value.name === name) docPending.value = null
+          didSave = true
+        } catch { failed = true }
+      }
+
+      if (pendingUpdates.size > 0) {
+        setSaveState('saving')
+        const snapshot = [...pendingUpdates.entries()]
+        for (const [id, data] of snapshot) {
+          if (failedCreates.value.has(id)) continue // 待创建重试，交由 retryCreate 处理
+          try {
+            await api.put(`/blocks/${realIdOf(id)}`, data)
+            // 仅当队列里仍是这份快照时才移除；保存期间的新输入保留，下一轮再存
+            const cur = pendingUpdates.get(id)
+            if (cur && JSON.stringify(cur) === JSON.stringify(data)) pendingUpdates.delete(id)
+            didSave = true
+          } catch { failed = true }
+        }
+      }
+      if (failed) break
+    } while (rerunRequested || pendingUpdates.size > 0 || docPending.value)
+
+    if (failed) setSaveState('error')
+    else if (docPending.value || pendingUpdates.size > 0) setSaveState('pending')
+    else if (didSave) setSaveState('saved')
+  } finally {
+    saveBusy = false
   }
 }
 
@@ -469,15 +553,33 @@ onUnmounted(() => {
   flushSaves()
 })
 
-// 切换文档（路由离开）前：flush 保存 + 记录停留位置（last_position）
+// 切换文档（路由离开）前：flush 保存 + 未保存守卫 + 记录停留位置（last_position）
 const lastEditedBlockId = ref<number | null>(null)
+const leaveGuard = ref<null | { resolve: (c: 'retry' | 'stay' | 'discard') => void }>(null)
+
+function askLeave(): Promise<'retry' | 'stay' | 'discard'> {
+  return new Promise(resolve => { leaveGuard.value = { resolve } })
+}
+
+function answerLeave(c: 'retry' | 'stay' | 'discard') {
+  leaveGuard.value?.resolve(c)
+  leaveGuard.value = null
+}
 
 onBeforeRouteLeave(async () => {
   await flushSaves()
+  // 仍有未保存内容（失败未落库）→ 提供 重试 / 留在页面 / 放弃 选择，而非静默丢数据
+  while (saveState.value === 'error' || pendingUpdates.size > 0 || docPending.value) {
+    const choice = await askLeave()
+    if (choice === 'discard') break
+    if (choice === 'stay') return false
+    await flushSaves() // retry
+  }
   if (lastEditedBlockId.value !== null) {
     try {
       await api.put(`/documents/${props.id}`, {
-        last_position: JSON.stringify({ block_id: lastEditedBlockId.value }),
+        // 停留位置保存真实块 id（临时负 id 无法匹配数据库中真实记录）
+        last_position: JSON.stringify({ block_id: realIdOf(lastEditedBlockId.value) }),
       })
     } catch {
       // last_position 保存失败不阻塞导航
@@ -529,17 +631,14 @@ function makeDefaultContent(type: ContentBlock['type']): ContentBlock {
 
 // ── 文档标题（正文顶部可编辑大标题）──
 const docTitleEl = ref<HTMLTextAreaElement | null>(null)
-let docTitleTimer: number | null = null
 
 function onDocTitleInput(e: Event) {
   const ta = e.target as HTMLTextAreaElement
   autoResize(ta)
   if (!doc.value) return
   doc.value.name = ta.value
-  if (docTitleTimer !== null) clearTimeout(docTitleTimer)
-  docTitleTimer = window.setTimeout(() => {
-    api.put(`/documents/${props.id}`, { name: doc.value!.name }).catch(() => {})
-  }, 500)
+  docPending.value = { name: ta.value }
+  scheduleFlush()
 }
 
 // ── textarea 自动增高（field-sizing 兜底）──
@@ -1050,6 +1149,7 @@ async function onDrop(block: Block, e: DragEvent) {
       <button class="icon-btn" title="撤销 (Ctrl+Z)" :disabled="undoStack.length === 0" @click="undo">↶ 撤销</button>
       <button class="icon-btn" title="重做 (Ctrl+Y)" :disabled="redoStack.length === 0" @click="redo">↷ 重做</button>
       <span v-if="saveStateText" class="save-status" :class="saveState">{{ saveStateText }}</span>
+      <button v-if="saveState === 'error'" class="icon-btn save-retry" title="立即重试保存" @click="flushSaves">重试保存</button>
     </header>
 
     <div class="editor-body">
@@ -1140,6 +1240,11 @@ async function onDrop(block: Block, e: DragEvent) {
               @click.stop="toggleTimePopover(row.block.id)"
             >{{ timeChip(row.block).text }}</button>
             <button class="row-more" title="更多操作" @click.stop="toggleMoreMenu(row.block.id)">⋯</button>
+            <span v-if="failedCreates.has(row.block.id)" class="row-unsynced" @click.stop>
+              <span class="unsynced-tag">未同步</span>
+              <button class="unsynced-op" title="重新创建此块" @click="retryCreate(row.block.id)">重试</button>
+              <button class="unsynced-op" title="复制正文到剪贴板" @click="copyUnsynced(row.block.id)">复制</button>
+            </span>
           </div>
 
           <!-- 工作时段 popover -->
@@ -1215,6 +1320,19 @@ async function onDrop(block: Block, e: DragEvent) {
         保留子块（提升为{{ deleteTarget.block.parent_id ? '上一级' : '独立' }}任务块）
       </label>
     </ConfirmDialog>
+
+    <!-- 离页未保存守卫：重试 / 留在页面 / 放弃 -->
+    <div v-if="leaveGuard" class="dialog-overlay">
+      <div class="dialog" role="alertdialog" aria-modal="true" aria-labelledby="leave-guard-title">
+        <h3 id="leave-guard-title" class="dialog-title">有未保存的更改</h3>
+        <p class="dialog-message">部分更改尚未成功保存。你可以重试保存，或放弃这些更改并离开。</p>
+        <div class="dialog-actions">
+          <button class="danger" @click="answerLeave('discard')">放弃更改并离开</button>
+          <button @click="answerLeave('stay')">留在页面</button>
+          <button class="primary" @click="answerLeave('retry')">重试保存</button>
+        </div>
+      </div>
+    </div>
   </div>
   <div v-else class="loading">加载中...</div>
 </template>
@@ -1251,6 +1369,8 @@ async function onDrop(block: Block, e: DragEvent) {
 .save-status.saved { color: var(--ok); }
 .save-status.saving, .save-status.pending { color: var(--accent); }
 .save-status.error { color: var(--danger); }
+.save-retry { color: var(--danger); border-color: rgba(197, 50, 43, 0.32); font-weight: 600; }
+.save-retry:hover { background: var(--danger); color: #fff; }
 
 /* 居中主栏：以 vw 动态占屏，上限 1500px 保证超宽屏阅读舒适 */
 .editor-body { max-width: min(1500px, 93vw); margin: 0 auto; padding: 48px 56px 32vh; }
@@ -1519,4 +1639,53 @@ async function onDrop(block: Block, e: DragEvent) {
   background: var(--bg-alt);
   border-radius: var(--radius);
 }
+
+/* 离页未保存守卫对话框（本组件内联实现，复用统一样式） */
+.dialog-overlay {
+  position: fixed; inset: 0;
+  background: rgba(35, 39, 43, 0.38);
+  backdrop-filter: blur(2px);
+  display: flex; align-items: center; justify-content: center;
+  z-index: 1000;
+}
+.dialog {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 26px;
+  width: min(480px, calc(100vw - 32px));
+  box-shadow: var(--shadow-lg);
+  animation: wm-pop 0.18s ease-out;
+}
+.dialog-title { font-family: var(--font-serif); font-size: 1.15rem; font-weight: 700; margin-bottom: 8px; }
+.dialog-message { color: var(--muted); margin-bottom: 12px; font-size: 0.9rem; }
+.dialog-actions { display: flex; gap: 8px; justify-content: flex-end; }
+
+/* 未同步块标记 */
+.row-unsynced {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 5px;
+  flex-shrink: 0;
+}
+.unsynced-tag {
+  font-size: 11px;
+  color: var(--danger);
+  border: 1px solid rgba(197, 50, 43, 0.35);
+  border-radius: 999px;
+  padding: 0 8px;
+  line-height: 1.6;
+  white-space: nowrap;
+}
+.unsynced-op {
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--muted);
+  font-size: 11px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  line-height: 1.6;
+}
+.unsynced-op:hover { color: var(--accent); background: var(--bg-alt); }
 </style>

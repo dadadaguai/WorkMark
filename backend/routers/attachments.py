@@ -32,17 +32,11 @@ def _file_path(row) -> Path:
 def upload_attachment():
     """上传附件（multipart/form-data）。
 
-    字段：file（文件）或 original_path（引用模式原始路径）、
-    block_id（可选，建立块关联）、is_reference（"1" = 引用原始路径不复制）。
+    字段：file（文件）或 original_path（引用模式原始路径）、is_reference（"1" = 引用原始路径不复制）。
+    块关联不再在此建立：由块内容（attachment_id）经 blocks.sync_block_attachments 统一维护。
     """
     f = request.files.get("file")
-    block_id = request.form.get("block_id") or None
     is_reference = request.form.get("is_reference") == "1"
-
-    if block_id is not None:
-        blk = g.db.execute("SELECT id FROM blocks WHERE id = ?", (block_id,)).fetchone()
-        if blk is None:
-            return jsonify({"error": "块不存在"}), 404
 
     if is_reference:
         original_path = (request.form.get("original_path") or "").strip()
@@ -73,11 +67,6 @@ def upload_attachment():
         (file_name, stored_path, size, mime, 1 if is_reference else 0),
     )
     att_id = cur.lastrowid
-    if block_id is not None:
-        g.db.execute(
-            "INSERT OR IGNORE INTO block_attachments (block_id, attachment_id) VALUES (?, ?)",
-            (block_id, att_id),
-        )
     g.db.commit()
     row = g.db.execute("SELECT * FROM attachments WHERE id = ?", (att_id,)).fetchone()
     return jsonify(dict(row)), 201

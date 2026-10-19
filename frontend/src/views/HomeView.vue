@@ -648,8 +648,7 @@ function continueLastWork() {
   border-radius: var(--radius-lg);
   border: 1px solid var(--border);
   padding: 26px;
-  min-width: 360px;
-  max-width: 480px;
+  width: min(480px, calc(100vw - 32px));
   box-shadow: var(--shadow-lg);
   animation: wm-pop 0.18s ease-out;
 }
@@ -663,26 +662,41 @@ function continueLastWork() {
   border: 1px solid var(--border);
   background: var(--bg);
   color: var(--fg);
-  padding: 6px 14px;
-  border-radius: var(--radius);
+  padding: 7px 16px;
+  border-radius: 8px;
   font-size: 0.88rem;
-  transition: color 0.15s, border-color 0.15s, background 0.15s;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+  transition:
+    color 0.16s ease,
+    border-color 0.16s ease,
+    background 0.16s ease,
+    box-shadow 0.16s ease,
+    transform 0.16s ease;
 }
 .att-entry:hover { background: var(--accent-light); color: var(--accent); border-color: var(--accent-line); }
+.att-entry:active { transform: translateY(1px) scale(0.99); }
 .last-work-btn {
   border: 1px solid var(--accent-line);
   background: var(--accent-light);
   color: var(--accent);
-  padding: 6px 14px;
+  padding: 7px 16px;
   border-radius: 999px;
   font-size: 0.88rem;
+  font-weight: 500;
+  letter-spacing: 0.01em;
   max-width: 360px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  transition: background 0.15s, border-color 0.15s;
+  transition:
+    background 0.16s ease,
+    border-color 0.16s ease,
+    box-shadow 0.16s ease,
+    transform 0.16s ease;
 }
 .last-work-btn:hover { background: rgba(181, 68, 44, 0.14); border-color: var(--accent); }
+.last-work-btn:active { transform: translateY(1px) scale(0.99); }
 .search-bar {
   display: flex;
   gap: 8px;
@@ -733,4 +747,18 @@ function continueLastWork() {
 .hit-block-title { font-weight: 600; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .block-hit-digest { color: var(--muted); font-size: 0.85rem; line-height: 1.6; }
 .block-hit-digest mark { background: rgba(176, 121, 22, 0.22); color: inherit; padding: 0 2px; border-radius: 3px; }
+
+/* 响应式：覆盖窄窗口 / 分屏 / 浏览器缩放（不主打手机，但不至于布局塌陷） */
+@media (max-width: 860px) {
+  .sidebar { width: 200px; }
+  .home-header { flex-wrap: wrap; }
+  .search-bar { flex-wrap: wrap; }
+}
+@media (max-width: 640px) {
+  .sidebar { width: 168px; padding: 14px 10px; }
+  .content { padding: 20px 16px; }
+  .home-header { padding: 12px 16px; }
+  .search-bar { padding: 10px 16px; }
+  .search-date { width: 130px; }
+}
 </style>

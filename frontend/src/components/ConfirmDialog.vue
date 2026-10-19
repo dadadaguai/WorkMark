@@ -1,5 +1,8 @@
 <script setup lang="ts">
-/** 通用确认对话框，支持显示影响范围详情。 */
+/** 通用确认对话框，支持显示影响范围详情。
+ * 无障碍：role=dialog + aria-modal、Esc 关闭、初始聚焦、Tab 焦点圈定、关闭后焦点恢复。
+ */
+import { onMounted, onUnmounted, ref, nextTick } from 'vue'
 
 defineProps<{
   title: string
@@ -15,14 +18,45 @@ const emit = defineEmits<{
   cancel: []
 }>()
 
+const root = ref<HTMLElement | null>(null)
+const cancelBtn = ref<HTMLButtonElement | null>(null)
+const confirmBtn = ref<HTMLButtonElement | null>(null)
+
+let previouslyFocused: HTMLElement | null = null
+
 function onConfirm() { emit('confirm') }
 function onCancel() { emit('cancel') }
+
+function handleKeydown(e: KeyboardEvent) {
+  if (e.key === 'Escape') { e.preventDefault(); onCancel(); return }
+  if (e.key !== 'Tab') return
+  const list = Array.from(
+    root.value?.querySelectorAll<HTMLElement>('button, input, select, textarea, [href], [tabindex]:not([tabindex="-1"])') ?? [],
+  ).filter(el => !el.hasAttribute('disabled'))
+  if (list.length === 0) return
+  const first = list[0]
+  const last = list[list.length - 1]
+  const active = document.activeElement as HTMLElement
+  if (e.shiftKey && active === first) { e.preventDefault(); last.focus() }
+  else if (!e.shiftKey && active === last) { e.preventDefault(); first.focus() }
+}
+
+onMounted(() => {
+  previouslyFocused = document.activeElement as HTMLElement | null
+  nextTick(() => (confirmBtn.value || cancelBtn.value)?.focus())
+  document.addEventListener('keydown', handleKeydown)
+})
+
+onUnmounted(() => {
+  document.removeEventListener('keydown', handleKeydown)
+  previouslyFocused?.focus?.()
+})
 </script>
 
 <template>
-  <div class="dialog-overlay" @click.self="onCancel">
+  <div ref="root" class="dialog-overlay" role="dialog" aria-modal="true" aria-labelledby="confirm-dialog-title" @click.self="onCancel">
     <div class="dialog">
-      <h3 class="dialog-title">{{ title }}</h3>
+      <h3 id="confirm-dialog-title" class="dialog-title">{{ title }}</h3>
       <p v-if="message" class="dialog-message">{{ message }}</p>
       <ul v-if="details && details.length" class="dialog-details">
         <li v-for="d in details" :key="d.label">
@@ -32,8 +66,8 @@ function onCancel() { emit('cancel') }
       </ul>
       <div class="dialog-slot"><slot /></div>
       <div class="dialog-actions">
-        <button @click="onCancel">{{ cancelText || '取消' }}</button>
-        <button :class="danger ? 'danger' : 'primary'" @click="onConfirm">{{ confirmText || '确认' }}</button>
+        <button ref="cancelBtn" @click="onCancel">{{ cancelText || '取消' }}</button>
+        <button ref="confirmBtn" :class="danger ? 'danger' : 'primary'" @click="onConfirm">{{ confirmText || '确认' }}</button>
       </div>
     </div>
   </div>
@@ -52,8 +86,7 @@ function onCancel() { emit('cancel') }
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
   padding: 26px;
-  min-width: 360px;
-  max-width: 480px;
+  width: min(480px, calc(100vw - 32px));
   box-shadow: var(--shadow-lg);
   animation: wm-pop 0.18s ease-out;
 }

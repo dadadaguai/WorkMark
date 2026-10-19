@@ -86,6 +86,7 @@ function removeRow(ri: number) {
 // ── 图片（附件系统：上传后引用 attachment_id；旧 dataURL 内容保持兼容）──
 const zoomSrc = ref<string | null>(null)
 const imageUploading = ref(false)
+const imageError = ref('')
 
 function imageUrl(): string | null {
   if (item.value.attachment_id) return `/api/attachments/${item.value.attachment_id}/file`
@@ -98,16 +99,16 @@ async function onImagePick(e: Event) {
   if (!f) return
   if (imageUploading.value) return
   imageUploading.value = true
+  imageError.value = ''
   try {
     const form = new FormData()
     form.append('file', f)
-    if (props.blockId !== undefined) form.append('block_id', String(props.blockId))
     const att = await api.upload<{ id: number }>('/attachments', form)
     item.value.attachment_id = att.id
     item.value.content = ''
     flush()
   } catch (err) {
-    alert(`图片上传失败：${err instanceof Error ? err.message : err}`)
+    imageError.value = `图片上传失败：${err instanceof Error ? err.message : err}`
   } finally {
     imageUploading.value = false
   }
@@ -216,6 +217,7 @@ function lineNumbers(text: string): string {
             <span>{{ imageUploading ? '上传中…' : '点击上传图片' }}</span>
             <input type="file" accept="image/*" :disabled="imageUploading" @change="onImagePick" />
           </label>
+          <p v-if="imageError" class="ce-image-error">{{ imageError }}</p>
         </div>
       </template>
 
@@ -428,6 +430,7 @@ function lineNumbers(text: string): string {
 .ce-upload:hover { border-color: var(--accent-line); background: var(--accent-light); color: var(--accent); }
 .ce-upload.disabled { opacity: 0.5; cursor: default; }
 .ce-upload-icon { font-size: 22px; }
+.ce-image-error { color: var(--danger); font-size: 0.8rem; margin-top: 6px; }
 
 /* 图片放大遮罩 */
 .ce-zoom {

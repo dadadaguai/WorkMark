@@ -56,12 +56,6 @@ def _title_digest(title: str, terms: list[str], max_len: int = 120) -> str:
     return text[:max_len] or "（空）"
 
 
-def _match_all(haystacks: list, terms: list[str]) -> bool:
-    """所有关键词至少命中任一字段（大小写无关）。"""
-    lowers = [str(h).lower() for h in haystacks if h]
-    return all(any(t.lower() in h for h in lowers) for t in terms)
-
-
 def _content_type_label(content: str) -> str:
     """content 行（title 为空）的类型化标题，与编辑器摘要一致。"""
     try:
@@ -81,7 +75,8 @@ def _content_type_label(content: str) -> str:
 def search():
     """全文搜索：块标题 + 块内容 + 文档名。
 
-    参数：q（关键词，空格分隔多词）、date（YYYY-MM-DD，按创建/工作开始日期过滤），可组合。
+    参数：q（关键词，空格分隔多词 AND）、date（YYYY-MM-DD，按创建/工作开始日期过滤）、
+    limit / offset（分页）。
     """
     q = (request.args.get("q") or "").strip()
     date = (request.args.get("date") or "").strip()
@@ -89,14 +84,24 @@ def search():
         return jsonify({"error": "q 或 date 至少提供一个"}), 400
     terms = [t for t in q.split() if t]
 
-    sql = "SELECT * FROM blocks"
+    # 在数据库阶段完成筛选（不再于 Python 中截断前 500 块），避免超出 500 块后漏记录
     conds, params = [], []
+    for t in terms:
+        conds.append("(title LIKE ? OR content LIKE ?)")
+        params += [f"%{t}%", f"%{t}%"]
     if date:
         conds.append("(created_at LIKE ? OR work_start_time LIKE ?)")
         params += [f"{date}%", f"{date}%"]
-    if conds:
-        sql += " WHERE " + " AND ".join(conds)
-    rows = g.db.execute(sql + " ORDER BY document_id, sort_order, id LIMIT 500", params).fetchall()
+    where = (" WHERE " + " AND ".join(conds)) if conds else ""
+
+    limit = max(1, min(request.args.get("limit", 200, type=int) or 200, 1000))
+    offset = max(0, request.args.get("offset", 0, type=int) or 0)
+
+    total = g.db.execute(f"SELECT COUNT(*) FROM blocks{where}", params).fetchone()[0]
+    rows = g.db.execute(
+        f"SELECT * FROM blocks{where} ORDER BY document_id, sort_order, id LIMIT ? OFFSET ?",
+        params + [limit, offset],
+    ).fetchall()
 
     doc_names = {
         r["id"]: r["name"]
@@ -105,8 +110,6 @@ def search():
 
     results = []
     for r in rows:
-        if terms and not _match_all([r["title"], r["content"]], terms):
-            continue
         # text 行正文在 title；content 行摘要从 content JSON 提取
         digest = _content_digest(r["content"], terms) if r["content"] not in (None, "", "[]") \
             else _title_digest(r["title"] or "", terms)
@@ -120,16 +123,18 @@ def search():
             "work_start_time": r["work_start_time"],
             "digest": digest,
         })
-        if len(results) >= 100:
-            break
 
-    # 文档名命中（块未命中的空文档也能被找到）
+    # 文档名命中（块未命中的空文档也能被找到），日期条件同样生效
     doc_hits = []
     if terms:
-        cond = " AND ".join("name LIKE ?" for _ in terms)
+        doc_conds = ["name LIKE ?" for _ in terms]
+        doc_params = [f"%{t}%" for t in terms]
+        if date:
+            doc_conds.append("created_at LIKE ?")
+            doc_params.append(f"{date}%")
         docs = g.db.execute(
-            f"SELECT id, name, updated_at FROM documents WHERE {cond} LIMIT 20",
-            [f"%{t}%" for t in terms],
+            f"SELECT id, name, updated_at FROM documents WHERE {' AND '.join(doc_conds)} LIMIT 20",
+            doc_params,
         ).fetchall()
         for d in docs:
             cnt = g.db.execute(
@@ -142,15 +147,15 @@ def search():
                 "block_count": cnt,
             })
 
-    return jsonify({"blocks": results, "documents": doc_hits, "total": len(results)})
+    return jsonify({"blocks": results, "documents": doc_hits, "total": total})
 
 
 @bp.get("/last-work")
 def last_work():
-    """最近工作上下文：最近更新的文档及其停留位置（"继续上次工作"入口）。"""
+    """最近访问文档（"继续上次浏览"入口）：按最后访问时间排序，回退到更新时间。"""
     row = g.db.execute(
-        "SELECT id, name, last_position, updated_at FROM documents "
-        "ORDER BY updated_at DESC, id DESC LIMIT 1"
+        "SELECT id, name, last_position, updated_at, last_accessed_at FROM documents "
+        "ORDER BY COALESCE(last_accessed_at, updated_at) DESC, id DESC LIMIT 1"
     ).fetchone()
     if row is None:
         return jsonify({"document": None})

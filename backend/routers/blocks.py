@@ -17,6 +17,81 @@ def normalize_content(content):
         return content
 
 
+def _touch_document(document_id):
+    """块内容变化时同步更新所属文档的 updated_at（内容更新时间）。"""
+    g.db.execute(
+        "UPDATE documents SET updated_at = datetime('now', 'localtime') WHERE id = ?",
+        (document_id,),
+    )
+
+
+def _hierarchy_error(document_id, parent_id, exclude_id=None):
+    """统一父子层级校验（两层模型：父块必须是顶层块）。
+
+    返回错误消息字符串；合法时返回 None。
+    规则：禁止跨文档、自身引用、循环嵌套、以及把含子块的块降为子块。
+    """
+    if parent_id is None:
+        return None
+    if parent_id == exclude_id:
+        return "不能把块设为其自身的子块"
+    parent = g.db.execute(
+        "SELECT id, document_id, parent_id FROM blocks WHERE id = ?", (parent_id,)
+    ).fetchone()
+    if parent is None:
+        return "父块不存在"
+    if parent["document_id"] != document_id:
+        return "父块不属于该文档"
+    if parent["parent_id"] is not None:
+        return "父块必须是顶层块（最多两层）"
+    if exclude_id is not None:
+        n = g.db.execute(
+            "SELECT COUNT(*) FROM blocks WHERE parent_id = ?", (exclude_id,)
+        ).fetchone()[0]
+        if n > 0:
+            return "含有子块的块不能设为子块"
+    return None
+
+
+def _attachment_ids_in_content(content):
+    """提取 content JSON 中引用到的 attachment_id 集合。"""
+    try:
+        arr = json.loads(content or "[]")
+    except (ValueError, TypeError):
+        return set()
+    if not isinstance(arr, list):
+        return set()
+    ids = set()
+    for it in arr:
+        if isinstance(it, dict) and it.get("attachment_id") is not None:
+            try:
+                ids.add(int(it["attachment_id"]))
+            except (ValueError, TypeError):
+                pass
+    return ids
+
+
+def sync_block_attachments(block_id, content):
+    """根据块内容统一维护 block_attachments 关联（创建/更新/复制后调用）。"""
+    refs = _attachment_ids_in_content(content)
+    existing = {
+        r["attachment_id"]
+        for r in g.db.execute(
+            "SELECT attachment_id FROM block_attachments WHERE block_id = ?", (block_id,)
+        ).fetchall()
+    }
+    for aid in refs - existing:
+        g.db.execute(
+            "INSERT OR IGNORE INTO block_attachments (block_id, attachment_id) VALUES (?, ?)",
+            (block_id, aid),
+        )
+    for aid in existing - refs:
+        g.db.execute(
+            "DELETE FROM block_attachments WHERE block_id = ? AND attachment_id = ?",
+            (block_id, aid),
+        )
+
+
 @bp.get("/document/<int:document_id>")
 def list_blocks_by_document(document_id):
     """获取文档内全部块（含子块），按 sort_order 排序。"""
@@ -40,13 +115,9 @@ def create_block():
 
     parent_id = body.get("parent_id")
     if parent_id is not None:
-        parent = g.db.execute(
-            "SELECT document_id FROM blocks WHERE id = ?", (parent_id,)
-        ).fetchone()
-        if parent is None:
-            return jsonify({"error": "父块不存在"}), 404
-        if parent["document_id"] != document_id:
-            return jsonify({"error": "父块不属于该文档"}), 400
+        err = _hierarchy_error(document_id, parent_id)
+        if err:
+            return jsonify({"error": err}), 400
 
     # 可选 after_id：插入到同父级指定块之后（后续兄弟顺延）；不传则追加到末尾
     after_id = body.get("after_id")
@@ -73,13 +144,16 @@ def create_block():
         ).fetchone()[0]
         sort_order = max_order + 1
 
+    content = normalize_content(body.get("content", "[]")) or "[]"
     cursor = g.db.execute(
         """INSERT INTO blocks (document_id, parent_id, title, content, sort_order, work_start_time, work_end_time)
            VALUES (?, ?, ?, ?, ?, ?, ?)""",
         (document_id, parent_id, body.get("title"),
-         normalize_content(body.get("content", "[]")) or "[]",
+         content,
          sort_order, body.get("work_start_time"), body.get("work_end_time")),
     )
+    sync_block_attachments(cursor.lastrowid, content)
+    _touch_document(document_id)
     g.db.commit()
     row = g.db.execute("SELECT * FROM blocks WHERE id = ?", (cursor.lastrowid,)).fetchone()
     return jsonify(dict(row)), 201
@@ -102,6 +176,13 @@ def update_block(block_id):
     body = request.get_json(force=True) or {}
     if "content" in body:
         body["content"] = normalize_content(body["content"])
+
+    # 父子层级统一校验（普通更新允许改 parent_id）
+    if body.get("parent_id") is not None:
+        err = _hierarchy_error(row["document_id"], body["parent_id"], exclude_id=block_id)
+        if err:
+            return jsonify({"error": err}), 400
+
     fields, values = [], []
     for f in ("title", "content", "parent_id", "sort_order", "work_start_time", "work_end_time"):
         if f not in body:
@@ -115,6 +196,9 @@ def update_block(block_id):
         fields.append("updated_at = datetime('now', 'localtime')")
         values.append(block_id)
         g.db.execute(f"UPDATE blocks SET {', '.join(fields)} WHERE id = ?", values)
+        if "content" in body:
+            sync_block_attachments(block_id, body["content"])
+        _touch_document(row["document_id"])
         g.db.commit()
 
     row = g.db.execute("SELECT * FROM blocks WHERE id = ?", (block_id,)).fetchone()
@@ -132,25 +216,48 @@ def reorder_blocks():
     if not updates:
         return jsonify({"error": "updates 不能为空"}), 400
 
-    for u in updates:
-        row = g.db.execute("SELECT id, document_id FROM blocks WHERE id = ?", (u["id"],)).fetchone()
-        if row is None:
-            return jsonify({"error": f"块 {u['id']} 不存在"}), 404
-        pid = u.get("parent_id")
-        if pid is not None:
-            parent = g.db.execute(
-                "SELECT document_id, parent_id FROM blocks WHERE id = ?", (pid,)
-            ).fetchone()
-            if parent is None or parent["parent_id"] is not None:
-                return jsonify({"error": f"父块 {pid} 无效（必须是顶层块）"}), 400
-            if parent["document_id"] != row["document_id"]:
-                return jsonify({"error": "父子块不属于同一文档"}), 400
+    # 先取全部块信息（id → 文档/当前父级），用于统一校验最终结构
+    ids = [u["id"] for u in updates]
+    ph = ",".join("?" * len(ids))
+    rows = g.db.execute(
+        f"SELECT id, document_id, parent_id FROM blocks WHERE id IN ({ph})", ids
+    ).fetchall()
+    if len(rows) != len(ids):
+        return jsonify({"error": "存在不存在的块"}), 404
+    meta = {r["id"]: r for r in rows}
+    new_parent = {u["id"]: u.get("parent_id") for u in updates}
 
+    # 统一校验：两层模型——最终父块必须是顶层块；禁止自引用/循环/跨文档/降级含子块的块
+    for u in updates:
+        bid = u["id"]
+        pid = new_parent.get(bid)
+        if pid is None:
+            continue
+        if pid == bid:
+            return jsonify({"error": f"块 {bid} 不能作为自身的子块"}), 400
+        doc_id = meta[bid]["document_id"]
+        # 父块的“最终父级”：若本次也更新了它的 parent_id，则取新值，否则取其当前值
+        pid_final = new_parent.get(pid, meta[pid]["parent_id"] if pid in meta else None)
+        if pid_final is not None:
+            return jsonify({"error": f"父块 {pid} 最终不是顶层块，不能作为 {bid} 的父块"}), 400
+        if pid not in meta:
+            return jsonify({"error": f"父块 {pid} 不存在"}), 404
+        if meta[pid]["document_id"] != doc_id:
+            return jsonify({"error": f"块 {bid} 与父块 {pid} 不属于同一文档"}), 400
+        n = g.db.execute(
+            "SELECT COUNT(*) FROM blocks WHERE parent_id = ?", (bid,)
+        ).fetchone()[0]
+        if n > 0:
+            return jsonify({"error": f"块 {bid} 含有子块，不能设为子块"}), 400
+
+    doc_ids = {meta[u["id"]]["document_id"] for u in updates}
     for u in updates:
         g.db.execute(
             "UPDATE blocks SET parent_id = ?, sort_order = ?, updated_at = datetime('now', 'localtime') WHERE id = ?",
             (u.get("parent_id"), u.get("sort_order", 0), u["id"]),
         )
+    for d in doc_ids:
+        _touch_document(d)
     g.db.commit()
     return jsonify({"updated": len(updates)})
 
@@ -169,6 +276,7 @@ def copy_block(block_id):
             (src["document_id"], parent_id, src["title"], src["content"], sort_order,
              src["work_start_time"], src["work_end_time"]),
         )
+        sync_block_attachments(cursor.lastrowid, src["content"])
         return cursor.lastrowid
 
     if row["parent_id"] is None:
@@ -192,6 +300,7 @@ def copy_block(block_id):
         ).fetchone()[0]
         new_id = insert_copy(row, row["parent_id"], max_order + 1)
 
+    _touch_document(row["document_id"])
     g.db.commit()
     new_row = g.db.execute("SELECT * FROM blocks WHERE id = ?", (new_id,)).fetchone()
     return jsonify(dict(new_row)), 201
@@ -222,9 +331,11 @@ def delete_block(block_id):
         ).fetchall()
         n = len(kids)
         # 同父级中位于被删块之后的兄弟块整体后移，腾出插入空间
+        # 明确限定 document_id + 父级，避免顶层块（parent_id 全为 NULL）跨文档误更新排序
         g.db.execute(
-            "UPDATE blocks SET sort_order = sort_order + ? WHERE parent_id IS ? AND sort_order > ?",
-            (n, parent_id, pos),
+            "UPDATE blocks SET sort_order = sort_order + ? "
+            "WHERE document_id = ? AND parent_id IS ? AND sort_order > ?",
+            (n, row["document_id"], parent_id, pos),
         )
         for i, k in enumerate(kids):
             g.db.execute(
@@ -232,9 +343,11 @@ def delete_block(block_id):
                 (parent_id, pos + 1 + i, k["id"]),
             )
         g.db.execute("DELETE FROM blocks WHERE id = ?", (block_id,))
+        _touch_document(row["document_id"])
         g.db.commit()
         return jsonify({"deleted": block_id, "affected_children": child_count, "kept_children": n})
 
     g.db.execute("DELETE FROM blocks WHERE id = ?", (block_id,))
+    _touch_document(row["document_id"])
     g.db.commit()
     return jsonify({"deleted": block_id, "affected_children": child_count})

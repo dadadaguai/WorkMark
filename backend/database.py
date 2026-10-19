@@ -28,6 +28,7 @@ CREATE TABLE IF NOT EXISTS documents (
     name          TEXT    NOT NULL DEFAULT '新建文档',
     sort_order    INTEGER NOT NULL DEFAULT 0,
     last_position TEXT,   -- JSON，记录上次停留位置（block_id, scroll 等）
+    last_accessed_at TEXT, -- 最后访问时间（与内容 updated_at 分离）
     created_at    TEXT    NOT NULL DEFAULT (datetime('now', 'localtime')),
     updated_at    TEXT    NOT NULL DEFAULT (datetime('now', 'localtime'))
 );
@@ -105,11 +106,19 @@ def get_connection() -> sqlite3.Connection:
     return conn
 
 
+def _ensure_document_columns(conn):
+    """为已有库补齐新增列（幂等）。"""
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(documents)").fetchall()}
+    if "last_accessed_at" not in cols:
+        conn.execute("ALTER TABLE documents ADD COLUMN last_accessed_at TEXT")
+
+
 def init_db():
     """初始化数据库 schema 和默认数据。"""
     conn = get_connection()
     try:
         conn.executescript(SCHEMA_SQL)
+        _ensure_document_columns(conn)
         # 插入默认文件夹（如果不存在）
         row = conn.execute("SELECT id FROM folders WHERE is_default = 1").fetchone()
         if row is None:

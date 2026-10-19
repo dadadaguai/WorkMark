@@ -61,16 +61,29 @@ def update_document(document_id):
         return jsonify({"error": "文档不存在"}), 404
 
     body = request.get_json(force=True) or {}
-    fields, values = [], []
-    for f in ("name", "folder_id", "sort_order", "last_position"):
-        v = body.get(f)
-        if v is not None:
-            fields.append(f"{f} = ?")
-            values.append(v)
-    if fields:
-        fields.append("updated_at = datetime('now', 'localtime')")
-        values.append(document_id)
-        g.db.execute(f"UPDATE documents SET {', '.join(fields)} WHERE id = ?", values)
+    changed = False
+
+    # 内容性更新（名称/位置/排序）→ 更新 updated_at（内容修改时间）
+    content_fields, content_values = [], []
+    for f in ("name", "folder_id", "sort_order"):
+        if f in body and body[f] is not None:
+            content_fields.append(f"{f} = ?")
+            content_values.append(body[f])
+    if content_fields:
+        content_fields.append("updated_at = datetime('now', 'localtime')")
+        content_values.append(document_id)
+        g.db.execute(f"UPDATE documents SET {', '.join(content_fields)} WHERE id = ?", content_values)
+        changed = True
+
+    # 停留位置 → 更新 last_accessed_at（访问时间，与内容更新时间分离）
+    if "last_position" in body and body["last_position"] is not None:
+        g.db.execute(
+            "UPDATE documents SET last_position = ?, last_accessed_at = datetime('now', 'localtime') WHERE id = ?",
+            (body["last_position"], document_id),
+        )
+        changed = True
+
+    if changed:
         g.db.commit()
 
     row = g.db.execute("SELECT * FROM documents WHERE id = ?", (document_id,)).fetchone()
