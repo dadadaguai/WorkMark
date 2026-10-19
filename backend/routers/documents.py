@@ -1,8 +1,41 @@
 """任务文档 CRUD 路由。"""
 
+import json
+
 from flask import Blueprint, request, jsonify, g
 
 bp = Blueprint("documents", __name__)
+
+
+def _block_summary(title, content):
+    """文档列表摘要：text 行取首行正文；content 行取类型化标签。"""
+    if title:
+        first = next((ln.strip() for ln in title.splitlines() if ln.strip()), "")
+        return first[:80]
+    try:
+        arr = json.loads(content or "[]")
+        it = arr[0] if isinstance(arr, list) and arr else None
+        if isinstance(it, dict):
+            label = {"code": "代码", "shell": "命令", "output": "输出",
+                     "todo": "待办", "table": "表格", "image": "图片"}.get(it.get("type"), "内容块")
+            return f"[{label}]"
+    except (ValueError, TypeError):
+        pass
+    return ""
+
+
+def _document_summaries():
+    """每个文档首个顶层块摘要（text 行正文 / content 行类型标签）。"""
+    out = {}
+    rows = g.db.execute(
+        "SELECT b.document_id, b.title, b.content FROM blocks b "
+        "WHERE b.parent_id IS NULL AND b.id = ("
+        "  SELECT MIN(id) FROM blocks WHERE parent_id IS NULL AND document_id = b.document_id"
+        ")"
+    ).fetchall()
+    for r in rows:
+        out[r["document_id"]] = _block_summary(r["title"], r["content"])
+    return out
 
 
 @bp.get("")
@@ -14,7 +47,9 @@ def list_documents():
         ).fetchall()
     else:
         rows = g.db.execute("SELECT * FROM documents ORDER BY updated_at DESC").fetchall()
-    return jsonify([dict(r) for r in rows])
+    summaries = _document_summaries()
+    result = [dict(r) | {"summary": summaries.get(r["id"], "")} for r in rows]
+    return jsonify(result)
 
 
 @bp.post("")

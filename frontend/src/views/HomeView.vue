@@ -4,6 +4,7 @@ import { useRouter } from 'vue-router'
 import { useAppStore } from '@/stores/app'
 import { api } from '@/composables/useApi'
 import ConfirmDialog from '@/components/ConfirmDialog.vue'
+import FolderTreeSelect from '@/components/FolderTreeSelect.vue'
 import type { Folder, Document, SearchResult } from '@/types'
 
 const router = useRouter()
@@ -34,12 +35,6 @@ const moveTargetFolderId = ref<number | null>(null)
 const moveFolderTarget = ref<{ id: number; name: string } | null>(null)
 const moveFolderParentId = ref<number | null>(null)
 
-// 可选目标文件夹（排除自身及其子树）
-const moveableFolders = computed(() => {
-  if (!moveTargetDoc.value) return store.folders
-  return store.folders
-})
-
 /** 返回 folder_id 及其全部子孙文件夹 id（用于移动时排除，避免循环嵌套）。 */
 function folderDescendants(id: number): Set<number> {
   const excluded = new Set<number>()
@@ -59,12 +54,72 @@ function folderDescendants(id: number): Set<number> {
   return excluded
 }
 
-const folderMoveTargets = computed(() => {
-  if (!moveFolderTarget.value) return []
-  // 排除自身及其整个子树（否则会把文件夹移进自己的子孙，形成循环）
+// ── 文件夹树（展开/折叠 + 面包屑）──
+const expandedFolders = ref(new Set<number>())
+
+const defaultFolderId = computed(() => store.folders.find(f => f.is_default === 1)?.id ?? null)
+
+const folderChildren = computed(() => {
+  const map = new Map<number | null, Folder[]>()
+  for (const f of store.folders) {
+    const k = f.parent_id
+    if (!map.has(k)) map.set(k, [])
+    map.get(k)!.push(f)
+  }
+  for (const arr of map.values()) arr.sort((a, b) => a.sort_order - b.sort_order || a.id - b.id)
+  return map
+})
+
+function childrenOf(pid: number | null): Folder[] {
+  return folderChildren.value.get(pid) ?? []
+}
+
+const visibleFolders = computed(() => {
+  const out: { folder: Folder; depth: number }[] = []
+  const walk = (pid: number | null, depth: number) => {
+    for (const f of childrenOf(pid)) {
+      out.push({ folder: f, depth })
+      if (expandedFolders.value.has(f.id)) walk(f.id, depth + 1)
+    }
+  }
+  walk(null, 0)
+  return out
+})
+
+function toggleFolder(id: number) {
+  const s = new Set(expandedFolders.value)
+  if (s.has(id)) s.delete(id)
+  else s.add(id)
+  expandedFolders.value = s
+}
+
+function expandPathTo(id: number) {
+  let cur = store.folders.find(f => f.id === id)
+  const s = new Set(expandedFolders.value)
+  while (cur && cur.parent_id !== null) {
+    s.add(cur.parent_id)
+    cur = store.folders.find(f => f.id === cur!.parent_id)
+  }
+  expandedFolders.value = s
+}
+
+/** 当前文件夹的祖先链（顶层 → 当前）。 */
+const folderPath = computed<Folder[]>(() => {
+  const path: Folder[] = []
+  let cur = store.folders.find(f => f.id === store.currentFolderId)
+  while (cur) {
+    path.unshift(cur)
+    cur = store.folders.find(f => f.id === cur!.parent_id)
+  }
+  return path
+})
+
+/** 移动文件夹时不可选中的 id（自身及其子树）。 */
+const folderMoveDisabled = computed(() => {
+  if (!moveFolderTarget.value) return [] as number[]
   const excluded = folderDescendants(moveFolderTarget.value.id)
   excluded.add(moveFolderTarget.value.id)
-  return store.folders.filter(f => !excluded.has(f.id))
+  return [...excluded]
 })
 
 onMounted(async () => {
@@ -85,6 +140,7 @@ onMounted(async () => {
 
 async function selectFolder(id: number) {
   store.currentFolderId = id
+  expandPathTo(id)
   await store.loadDocuments(id)
 }
 
@@ -297,6 +353,23 @@ function continueLastWork() {
   const pos = parseBlockId(lastDoc.value.last_position)
   router.push(pos ? `/document/${lastDoc.value.id}?block=${pos}` : `/document/${lastDoc.value.id}`)
 }
+
+/** 相对时间（本地时区）：刚刚 / N 分钟前 / N 小时前 / N 天前 / 日期。悬停由 title 展示完整时间。 */
+function relativeTime(ts: string): string {
+  if (!ts) return ''
+  const m = ts.match(/^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2}):?(\d{2})?/)
+  if (!m) return ts
+  const date = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]), Number(m[4]), Number(m[5]), Number(m[6] || '0'))
+  const sec = Math.floor((Date.now() - date.getTime()) / 1000)
+  if (sec < 60) return '刚刚'
+  const min = Math.floor(sec / 60)
+  if (min < 60) return `${min} 分钟前`
+  const hr = Math.floor(min / 60)
+  if (hr < 24) return `${hr} 小时前`
+  const day = Math.floor(hr / 24)
+  if (day < 30) return `${day} 天前`
+  return ts.slice(0, 10)
+}
 </script>
 
 <template>
@@ -327,17 +400,30 @@ function continueLastWork() {
     <div class="home-body">
       <!-- 文件夹侧栏 -->
       <aside class="sidebar">
-        <h3>文件夹</h3>
+        <div class="folder-crumb">
+          <button class="crumb" :class="{ current: folderPath.length === 0 }" @click="defaultFolderId !== null && selectFolder(defaultFolderId)">文件夹</button>
+          <template v-for="(f, i) in folderPath" :key="f.id">
+            <span class="crumb-sep">›</span>
+            <button class="crumb" :class="{ current: i === folderPath.length - 1 }" @click="selectFolder(f.id)">{{ f.name }}</button>
+          </template>
+        </div>
         <ul class="folder-list">
           <li
-            v-for="f in store.folders"
-            :key="f.id"
-            :class="{ active: f.id === store.currentFolderId }"
-            @click="selectFolder(f.id)"
+            v-for="n in visibleFolders"
+            :key="n.folder.id"
+            :class="{ active: n.folder.id === store.currentFolderId }"
+            :style="{ paddingLeft: (8 + n.depth * 16) + 'px' }"
+            @click="selectFolder(n.folder.id)"
           >
-            <span v-if="f.is_default" class="default-icon">★</span>
+            <button
+              class="folder-toggle"
+              :class="{ has: childrenOf(n.folder.id).length > 0 }"
+              :aria-expanded="childrenOf(n.folder.id).length > 0 ? expandedFolders.has(n.folder.id) : undefined"
+              @click.stop="toggleFolder(n.folder.id)"
+            >{{ childrenOf(n.folder.id).length ? (expandedFolders.has(n.folder.id) ? '▾' : '▸') : '' }}</button>
+            <span v-if="n.folder.is_default" class="default-icon">★</span>
             <input
-              v-if="editingFolderId === f.id"
+              v-if="editingFolderId === n.folder.id"
               v-model="editingFolderName"
               class="rename-input"
               @keyup.enter="confirmRenameFolder"
@@ -348,12 +434,12 @@ function continueLastWork() {
             <span
               v-else
               class="folder-name"
-              @dblclick.stop="startRenameFolder(f)"
-            >{{ f.name }}</span>
-            <span v-if="!f.is_default" class="folder-actions" @click.stop>
-              <button class="icon-btn" title="重命名" @click="startRenameFolder(f)">✎</button>
-              <button class="icon-btn" title="移动" @click="requestMoveFolder(f)">→</button>
-              <button class="icon-btn danger" title="删除" @click="requestDeleteFolder(f)">✕</button>
+              @dblclick.stop="startRenameFolder(n.folder)"
+            >{{ n.folder.name }}</span>
+            <span v-if="!n.folder.is_default" class="folder-actions" @click.stop>
+              <button class="icon-btn" title="重命名" @click="startRenameFolder(n.folder)">✎</button>
+              <button class="icon-btn" title="移动" @click="requestMoveFolder(n.folder)">→</button>
+              <button class="icon-btn danger" title="删除" @click="requestDeleteFolder(n.folder)">✕</button>
             </span>
           </li>
         </ul>
@@ -422,7 +508,11 @@ function continueLastWork() {
         </div>
 
         <div v-if="store.documents.length === 0" class="empty">
-          当前文件夹暂无文档，点击上方创建。
+          <p>当前文件夹暂无文档。</p>
+          <div class="empty-actions">
+            <button class="primary" @click="handleNewDocument">＋ 新建文档</button>
+            <button @click="router.push('/inbox')">⚡ 快速记录</button>
+          </div>
         </div>
         <ul v-else class="doc-list">
           <li v-for="doc in store.documents" :key="doc.id" class="doc-item" @click="router.push(`/document/${doc.id}`)">
@@ -436,8 +526,11 @@ function continueLastWork() {
               v-focus
             />
             <template v-else>
-              <span class="doc-name" @dblclick.stop="startRenameDoc(doc)">{{ doc.name }}</span>
-              <span class="doc-time">{{ doc.updated_at }}</span>
+              <span class="doc-main" @dblclick.stop="startRenameDoc(doc)">
+                <span class="doc-name">{{ doc.name }}</span>
+                <span v-if="doc.summary" class="doc-summary">{{ doc.summary }}</span>
+              </span>
+              <span class="doc-time" :title="`更新于 ${doc.updated_at}`">{{ relativeTime(doc.updated_at) }}</span>
               <span class="doc-actions" @click.stop>
                 <button class="icon-btn" title="重命名" @click="startRenameDoc(doc)">✎</button>
                 <button class="icon-btn" title="移动" @click="requestMoveDoc(doc)">→</button>
@@ -487,11 +580,7 @@ function continueLastWork() {
       <div class="dialog">
         <h3 class="dialog-title">移动文档「{{ moveTargetDoc.name }}」到</h3>
         <p class="dialog-message">选择目标文件夹：</p>
-        <select v-model="moveTargetFolderId" class="move-select">
-          <option v-for="f in moveableFolders" :key="f.id" :value="f.id">
-            {{ f.is_default ? '★ ' : '' }}{{ f.name }}
-          </option>
-        </select>
+        <FolderTreeSelect v-model="moveTargetFolderId" :folders="store.folders" />
         <div class="dialog-actions">
           <button @click="cancelMoveDoc">取消</button>
           <button class="primary" @click="confirmMoveDoc">移动</button>
@@ -504,12 +593,7 @@ function continueLastWork() {
       <div class="dialog">
         <h3 class="dialog-title">移动文件夹「{{ moveFolderTarget.name }}」到</h3>
         <p class="dialog-message">选择目标父文件夹（选择根级请留空）：</p>
-        <select v-model="moveFolderParentId" class="move-select">
-          <option :value="null">（根级）</option>
-          <option v-for="f in folderMoveTargets" :key="f.id" :value="f.id">
-            {{ f.is_default ? '★ ' : '' }}{{ f.name }}
-          </option>
-        </select>
+        <FolderTreeSelect v-model="moveFolderParentId" :folders="store.folders" allow-root :disabled="folderMoveDisabled" />
         <div class="dialog-actions">
           <button @click="cancelMoveFolder">取消</button>
           <button class="primary" @click="confirmMoveFolder">移动</button>
@@ -563,6 +647,24 @@ function continueLastWork() {
   letter-spacing: 0.14em;
   color: var(--muted);
 }
+.folder-crumb { display: flex; align-items: center; gap: 2px; flex-wrap: wrap; margin: 0 4px 10px; font-size: 0.82rem; }
+.crumb {
+  border: none; background: transparent; cursor: pointer;
+  color: var(--muted); padding: 2px 4px; border-radius: 4px;
+  font-size: 0.82rem; max-width: 140px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  transition: color 0.12s, background 0.12s;
+}
+.crumb:hover { color: var(--accent); background: rgba(181, 68, 44, 0.06); }
+.crumb.current { color: var(--fg); font-weight: 600; }
+.crumb-sep { color: var(--muted); opacity: 0.6; }
+.folder-toggle {
+  width: 16px; height: 16px; flex-shrink: 0;
+  border: none; background: transparent; cursor: default;
+  color: var(--muted); font-size: 0.68rem; padding: 0;
+  display: inline-flex; align-items: center; justify-content: center;
+}
+.folder-toggle.has { cursor: pointer; }
 .folder-list { list-style: none; margin-bottom: 16px; }
 .folder-list li {
   display: flex;
@@ -606,6 +708,8 @@ function continueLastWork() {
 .new-doc-bar { display: flex; gap: 8px; margin-bottom: 22px; }
 .new-doc-bar input { flex: 1; }
 .empty { color: var(--muted); padding: 48px; text-align: center; }
+.empty p { margin-bottom: 16px; }
+.empty-actions { display: flex; gap: 8px; justify-content: center; }
 .doc-list { list-style: none; }
 .doc-item {
   display: flex;
@@ -630,8 +734,10 @@ function continueLastWork() {
   box-shadow: var(--shadow);
   transform: translateY(-1px);
 }
-.doc-name { font-weight: 600; flex: 1; }
-.doc-time { color: var(--muted); font-size: 0.82rem; font-variant-numeric: tabular-nums; }
+.doc-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.doc-name { font-weight: 600; }
+.doc-summary { color: var(--muted); font-size: 0.82rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.doc-time { color: var(--muted); font-size: 0.82rem; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .doc-actions { display: none; gap: 2px; }
 .doc-item:hover .doc-actions { display: flex; }
 .move-select { width: 100%; padding: 8px; margin-bottom: 12px; border: 1px solid var(--border); border-radius: var(--radius); font-size: 0.9rem; background: var(--bg); }

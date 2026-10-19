@@ -3,6 +3,9 @@
 import { onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { api } from '@/composables/useApi'
+import { toast } from '@/composables/useToast'
+import ConfirmDialog from '@/components/ConfirmDialog.vue'
+import PromptDialog from '@/components/PromptDialog.vue'
 
 interface AttachmentRow {
   id: number
@@ -62,16 +65,25 @@ async function onFileAdd(e: Event) {
     await api.upload('/attachments', form)
     await load()
   } catch (err) {
-    alert(`上传失败：${err instanceof Error ? err.message : err}`)
+    toast(`上传失败：${err instanceof Error ? err.message : err}`, 'error')
   } finally {
     adding.value = false
   }
 }
 
 /** 添加引用：大文件不复制，仅记录原始路径。 */
-async function addReference() {
-  const p = prompt('输入原始文件完整路径（如 D:\\docs\\big.zip）：')
+const showRefPrompt = ref(false)
+const refPath = ref('')
+
+function openRefPrompt() {
+  refPath.value = ''
+  showRefPrompt.value = true
+}
+
+async function confirmReference() {
+  const p = refPath.value.trim()
   if (!p) return
+  showRefPrompt.value = false
   adding.value = true
   try {
     const form = new FormData()
@@ -80,19 +92,27 @@ async function addReference() {
     await api.upload('/attachments', form)
     await load()
   } catch (err) {
-    alert(`添加引用失败：${err instanceof Error ? err.message : err}`)
+    toast(`添加引用失败：${err instanceof Error ? err.message : err}`, 'error')
   } finally {
     adding.value = false
   }
 }
 
-async function removeAttachment(att: AttachmentRow) {
-  if (!confirm(`确认删除附件「${att.file_name}」？`)) return
+const removeTarget = ref<AttachmentRow | null>(null)
+
+function requestRemove(att: AttachmentRow) {
+  removeTarget.value = att
+}
+
+async function confirmRemove() {
+  if (!removeTarget.value) return
+  const att = removeTarget.value
+  removeTarget.value = null
   try {
     await api.del(`/attachments/${att.id}`)
   } catch (err) {
     // 409：仍被引用，后端拒绝删除
-    alert(err instanceof Error ? err.message : '删除失败')
+    toast(err instanceof Error ? err.message : '删除失败', 'error')
     return
   }
   await load()
@@ -113,7 +133,7 @@ function jumpToBlock(docId: number, blockId: number) {
         {{ adding ? '处理中…' : '+ 添加文件' }}
         <input type="file" :disabled="adding" hidden @change="onFileAdd" />
       </label>
-      <button :disabled="adding" @click="addReference">+ 引用原始路径</button>
+      <button :disabled="adding" @click="openRefPrompt">+ 引用原始路径</button>
     </header>
 
     <div class="att-toolbar">
@@ -153,10 +173,30 @@ function jumpToBlock(docId: number, blockId: number) {
         </div>
         <div class="att-ops">
           <button @click="openFile(att)">打开</button>
-          <button class="danger" @click="removeAttachment(att)">删除</button>
+          <button class="danger" @click="requestRemove(att)">删除</button>
         </div>
       </li>
     </ul>
+
+    <PromptDialog
+      v-if="showRefPrompt"
+      title="引用原始路径"
+      message="记录原始文件的完整路径（大文件不复制，仅建立引用）。"
+      placeholder="如 D:\docs\big.zip"
+      :initial-value="refPath"
+      @confirm="refPath = $event; confirmReference()"
+      @cancel="showRefPrompt = false"
+    />
+
+    <ConfirmDialog
+      v-if="removeTarget"
+      :title="`确认删除附件「${removeTarget.file_name}」？`"
+      message="删除后不可恢复；若仍被内容块引用，后端将拒绝删除。"
+      confirm-text="删除"
+      :danger="true"
+      @confirm="confirmRemove"
+      @cancel="removeTarget = null"
+    />
   </div>
 </template>
 

@@ -5,6 +5,8 @@
 import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { api } from '@/composables/useApi'
+import { toast } from '@/composables/useToast'
+import ConfirmDialog from '@/components/ConfirmDialog.vue'
 import type { InboxItem, Document } from '@/types'
 
 const router = useRouter()
@@ -47,7 +49,7 @@ async function addItem() {
     draft.value = ''
     await load()
   } catch (err) {
-    alert(`添加失败：${err instanceof Error ? err.message : err}`)
+    toast(`添加失败：${err instanceof Error ? err.message : err}`, 'error')
   } finally {
     adding.value = false
   }
@@ -85,16 +87,28 @@ async function confirmOrganize() {
     organize.value = null
     await load()
   } catch (err) {
-    alert(`操作失败：${err instanceof Error ? err.message : err}`)
+    toast(`操作失败：${err instanceof Error ? err.message : err}`, 'error')
   } finally {
     organizing.value = false
   }
 }
 
-async function removeItem(item: InboxItem) {
-  if (!confirm('确认删除此收件箱条目？不影响已移动/复制产生的任务块。')) return
-  await api.del(`/inbox/${item.id}`)
-  await load()
+const removeTarget = ref<InboxItem | null>(null)
+
+function requestRemove(item: InboxItem) {
+  removeTarget.value = item
+}
+
+async function confirmRemove() {
+  if (!removeTarget.value) return
+  const id = removeTarget.value.id
+  removeTarget.value = null
+  try {
+    await api.del(`/inbox/${id}`)
+    await load()
+  } catch (err) {
+    toast(`删除失败：${err instanceof Error ? err.message : err}`, 'error')
+  }
 }
 
 function goDocument(docId: number | null, blockId?: number) {
@@ -140,7 +154,7 @@ function goDocument(docId: number | null, blockId?: number) {
           <button v-if="item.status === 'pending'" @click="openOrganize(item, 'move')">移动到文档</button>
           <button v-if="item.status === 'pending'" @click="openOrganize(item, 'copy')">复制到文档</button>
           <button v-if="item.status === 'pending'" @click="openOrganize(item, 'link')">关联文档</button>
-          <button class="danger" @click="removeItem(item)">删除</button>
+          <button class="danger" @click="requestRemove(item)">删除</button>
         </div>
         <div class="inbox-content">{{ item.content }}</div>
         <div v-if="item.target_document_name" class="inbox-target">
@@ -172,6 +186,17 @@ function goDocument(docId: number | null, blockId?: number) {
         </div>
       </div>
     </div>
+
+    <!-- 删除确认对话框 -->
+    <ConfirmDialog
+      v-if="removeTarget"
+      title="确认删除此收件箱条目？"
+      message="不影响已移动 / 复制产生的任务块。"
+      confirm-text="删除"
+      :danger="true"
+      @confirm="confirmRemove"
+      @cancel="removeTarget = null"
+    />
   </div>
 </template>
 

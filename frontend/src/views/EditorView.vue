@@ -10,6 +10,7 @@ import { api } from '@/composables/useApi'
 import ContentEditor from '@/components/ContentEditor.vue'
 import SlashMenu from '@/components/SlashMenu.vue'
 import ConfirmDialog from '@/components/ConfirmDialog.vue'
+import PromptDialog from '@/components/PromptDialog.vue'
 import type { Document, Block, ContentBlock, SlashItem } from '@/types'
 
 const props = defineProps<{ id: string }>()
@@ -36,15 +37,28 @@ function persistTemplates() {
   localStorage.setItem(TEMPLATE_KEY, JSON.stringify(templates.value))
 }
 
-function saveBlockAsTemplate(block: Block) {
-  const name = prompt('模板名称：', summarize(block) || '未命名模板')
-  if (!name) return
+function saveTemplate(block: Block, name: string) {
   // text 行把正文包成 text 项存模板；content 行直接存单块 JSON
   const content = isTextRow(block)
     ? JSON.stringify([{ type: 'text', content: block.title ?? '' }])
     : block.content
   templates.value.push({ name, content })
   persistTemplates()
+}
+
+// 保存为模板：统一用 PromptDialog 输入名称（替代原生 prompt）
+const templateTarget = ref<Block | null>(null)
+
+function requestSaveTemplate(block: Block) {
+  templateTarget.value = block
+}
+
+function confirmSaveTemplate(name: string) {
+  const block = templateTarget.value
+  templateTarget.value = null
+  const n = name.trim()
+  if (!n || !block) return
+  saveTemplate(block, n)
 }
 
 // ── 数据加载（空文档自动创建首块，进入即可输入）──
@@ -1025,19 +1039,28 @@ async function copyBlock(block: Block) {
   await reloadBlocks()
 }
 
-// ── 浮层管理：时间 popover / 更多菜单 / 斜杠菜单 ──
+// ── 浮层管理：时间 popover / 更多菜单 / 斜杠菜单 / 视图菜单 ──
 const timePopoverId = ref<number | null>(null)
 const moreMenuId = ref<number | null>(null)
+const viewMenuOpen = ref(false)
 
 function toggleTimePopover(id: number) {
   timePopoverId.value = timePopoverId.value === id ? null : id
   moreMenuId.value = null
+  viewMenuOpen.value = false
   closeSlash()
 }
 
 function toggleMoreMenu(id: number) {
   moreMenuId.value = moreMenuId.value === id ? null : id
   timePopoverId.value = null
+  viewMenuOpen.value = false
+  closeSlash()
+}
+
+function toggleViewMenu() {
+  viewMenuOpen.value = !viewMenuOpen.value
+  closeFloats()
   closeSlash()
 }
 
@@ -1050,6 +1073,7 @@ function onDocMouseDown(e: MouseEvent) {
   const t = e.target as HTMLElement
   if (!t.closest('.row-popover') && !t.closest('.row-time') && !t.closest('.row-more')) closeFloats()
   if (!t.closest('.slash-menu')) closeSlash()
+  if (!t.closest('.view-menu-wrap')) viewMenuOpen.value = false
 }
 
 function onWinScroll() {
@@ -1150,6 +1174,28 @@ async function onDrop(block: Block, e: DragEvent) {
       <button class="icon-btn" title="重做 (Ctrl+Y)" :disabled="redoStack.length === 0" @click="redo">↷ 重做</button>
       <span v-if="saveStateText" class="save-status" :class="saveState">{{ saveStateText }}</span>
       <button v-if="saveState === 'error'" class="icon-btn save-retry" title="立即重试保存" @click="flushSaves">重试保存</button>
+      <div class="view-menu-wrap">
+        <button class="icon-btn" :class="{ on: viewMenuOpen }" title="视图选项" @click="toggleViewMenu">☰ 视图</button>
+        <div v-if="viewMenuOpen" class="view-menu" @mousedown.stop>
+          <div class="vm-label">排序方式</div>
+          <button
+            v-for="m in SORT_OPTIONS"
+            :key="m.value"
+            class="vm-item"
+            :class="{ on: sortMode === m.value }"
+            @click="sortMode = m.value; viewMenuOpen = false"
+          ><span class="vm-check"></span>{{ m.label }}</button>
+          <div class="vm-divider"></div>
+          <button class="vm-item" @click="collapsedView = !collapsedView">
+            <span class="vm-check"></span>{{ collapsedView ? '⊞ 平铺视图' : '⊟ 折叠视图' }}
+          </button>
+          <template v-if="collapsedView">
+            <button class="vm-item vm-indent" @click="expandAll">全部展开</button>
+            <button class="vm-item vm-indent" @click="collapseAll">全部收起</button>
+          </template>
+          <div v-if="sortMode !== 'doc'" class="vm-hint">排序仅影响展示；Enter / Tab / 拖拽按文档顺序执行</div>
+        </div>
+      </div>
     </header>
 
     <div class="editor-body">
@@ -1163,24 +1209,6 @@ async function onDrop(block: Block, e: DragEvent) {
         @input="onDocTitleInput"
         @keydown.enter.prevent="($event.target as HTMLTextAreaElement).blur()"
       ></textarea>
-
-      <!-- 排序 / 视图工具行 -->
-      <div class="doc-meta-bar">
-        <div class="seg">
-          <button
-            v-for="m in SORT_OPTIONS"
-            :key="m.value"
-            :class="{ on: sortMode === m.value }"
-            @click="sortMode = m.value"
-          >{{ m.label }}</button>
-        </div>
-        <button class="seg-toggle" @click="collapsedView = !collapsedView">{{ collapsedView ? '⊞ 平铺视图' : '⊟ 折叠视图' }}</button>
-        <template v-if="collapsedView">
-          <button class="seg-toggle" @click="expandAll">全部展开</button>
-          <button class="seg-toggle" @click="collapseAll">全部收起</button>
-        </template>
-        <span v-if="sortMode !== 'doc'" class="tl-hint">排序仅影响展示；Enter/Tab/拖拽按文档顺序执行</span>
-      </div>
 
       <!-- 文档流行列表 -->
       <template v-for="row in flatRows" :key="row.kind === 'group' ? 'g:' + row.label : 'b:' + row.block.id">
@@ -1272,7 +1300,7 @@ async function onDrop(block: Block, e: DragEvent) {
           <!-- 更多菜单 -->
           <div v-if="moreMenuId === row.block.id" class="row-popover row-more-menu" @mousedown.stop>
             <button class="menu-item" @click="copyBlock(row.block); moreMenuId = null">⧉ 完整复制（含子块）</button>
-            <button class="menu-item" @click="saveBlockAsTemplate(row.block); moreMenuId = null">▤ 内容存为模板</button>
+            <button class="menu-item" @click="requestSaveTemplate(row.block); moreMenuId = null">▤ 内容存为模板</button>
             <button class="menu-item danger" @click="moreMenuId = null; deleteBlock(row.block.id)">✕ 删除…</button>
           </div>
 
@@ -1320,6 +1348,18 @@ async function onDrop(block: Block, e: DragEvent) {
         保留子块（提升为{{ deleteTarget.block.parent_id ? '上一级' : '独立' }}任务块）
       </label>
     </ConfirmDialog>
+
+    <!-- 保存为模板名称输入 -->
+    <PromptDialog
+      v-if="templateTarget"
+      title="内容存为模板"
+      message="为该内容块模板命名："
+      placeholder="模板名称"
+      :initial-value="summarize(templateTarget)"
+      confirm-text="保存"
+      @confirm="confirmSaveTemplate"
+      @cancel="templateTarget = null"
+    />
 
     <!-- 离页未保存守卫：重试 / 留在页面 / 放弃 -->
     <div v-if="leaveGuard" class="dialog-overlay">
@@ -1384,6 +1424,7 @@ async function onDrop(block: Block, e: DragEvent) {
   resize: none;
   background: transparent;
   padding: 0 0 10px;
+  margin-bottom: 28px;
   width: 100%;
   overflow: hidden;
   line-height: 1.35;
@@ -1392,29 +1433,40 @@ async function onDrop(block: Block, e: DragEvent) {
 .doc-title:focus { border: none; box-shadow: none; }
 .doc-title::placeholder { color: #c9cdd1; }
 
-/* 工具行：右对齐静音（如飞书，不在文档左上压一排控件） */
-.doc-meta-bar {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  flex-wrap: wrap;
-  gap: 8px;
-  margin: 4px 0 20px;
+/* 视图菜单：排序/折叠收拢进 header 下拉，正文为主 */
+.view-menu-wrap { position: relative; }
+.view-menu {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 200;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lg);
+  padding: 6px;
+  min-width: 200px;
+  animation: wm-pop 0.16s ease-out;
 }
-.seg { display: inline-flex; border-radius: var(--radius); overflow: hidden; background: transparent; }
-.seg button {
-  border: none; background: transparent; padding: 4px 12px;
-  font-size: 12px; color: var(--muted); border-radius: var(--radius);
-}
-.seg button + button { border-left: none; }
-.seg button:hover { color: var(--fg); background: var(--bg-alt); }
-.seg button.on { background: var(--bg-alt); color: var(--fg); font-weight: 600; }
-.seg-toggle {
+.icon-btn.on { color: var(--fg); background: var(--bg-alt); }
+.vm-label { font-size: 11px; color: var(--faint); padding: 6px 10px 4px; letter-spacing: 0.04em; }
+.vm-item {
+  display: flex; align-items: center; gap: 8px;
+  width: 100%; text-align: left;
   border: none; background: transparent;
-  padding: 4px 12px; font-size: 12px; color: var(--muted); border-radius: var(--radius);
+  padding: 6px 10px; font-size: 13px; color: var(--fg);
+  border-radius: var(--radius);
 }
-.seg-toggle:hover { color: var(--fg); background: var(--bg-alt); }
-.tl-hint { color: var(--faint); margin-left: auto; font-size: 0.75rem; }
+.vm-item:hover { background: var(--bg-hover); }
+.vm-check {
+  flex-shrink: 0; width: 8px; height: 8px; border-radius: 50%;
+  border: 1px solid var(--border); opacity: 0.6;
+}
+.vm-item.on .vm-check { background: var(--accent); border-color: var(--accent); opacity: 1; }
+.vm-item.on { font-weight: 600; }
+.vm-divider { height: 1px; background: var(--border); margin: 4px 8px; }
+.vm-indent { padding-left: 26px; color: var(--muted); }
+.vm-hint { font-size: 11px; color: var(--faint); padding: 6px 10px 2px; line-height: 1.5; }
 
 /* 任务行：干净行式布局（飞书块式），hover 轻灰、聚焦更轻 */
 .doc-row {
@@ -1514,6 +1566,11 @@ async function onDrop(block: Block, e: DragEvent) {
 }
 .doc-row:hover .row-more, .doc-row:focus-within .row-more { opacity: 1; }
 .row-more:hover { background: var(--bg-alt); color: var(--fg); }
+
+/* 触屏 / 无悬停设备：行操作常显，保证可发现 */
+@media (hover: none) {
+  .row-time, .row-more { opacity: 1; }
+}
 
 /* 浮层：时间 popover / 更多菜单 */
 .row-popover {

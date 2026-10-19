@@ -18,6 +18,7 @@ export interface Document {
   last_position: string | null
   created_at: string
   updated_at: string
+  summary?: string
 }
 
 export interface InboxItem {
