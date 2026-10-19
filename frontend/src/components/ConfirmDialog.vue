@@ -2,9 +2,10 @@
 /** 通用确认对话框，支持显示影响范围详情。
  * 无障碍：role=dialog + aria-modal、Esc 关闭、初始聚焦、Tab 焦点圈定、关闭后焦点恢复。
  */
-import { onMounted, onUnmounted, ref, nextTick } from 'vue'
+import { ref } from 'vue'
+import { useDialogFocus } from '@/composables/useDialogFocus'
 
-defineProps<{
+const props = defineProps<{
   title: string
   message?: string
   details?: { label: string; value: number | string }[]
@@ -22,35 +23,12 @@ const root = ref<HTMLElement | null>(null)
 const cancelBtn = ref<HTMLButtonElement | null>(null)
 const confirmBtn = ref<HTMLButtonElement | null>(null)
 
-let previouslyFocused: HTMLElement | null = null
-
 function onConfirm() { emit('confirm') }
 function onCancel() { emit('cancel') }
 
-function handleKeydown(e: KeyboardEvent) {
-  if (e.key === 'Escape') { e.preventDefault(); onCancel(); return }
-  if (e.key !== 'Tab') return
-  const list = Array.from(
-    root.value?.querySelectorAll<HTMLElement>('button, input, select, textarea, [href], [tabindex]:not([tabindex="-1"])') ?? [],
-  ).filter(el => !el.hasAttribute('disabled'))
-  if (list.length === 0) return
-  const first = list[0]
-  const last = list[list.length - 1]
-  const active = document.activeElement as HTMLElement
-  if (e.shiftKey && active === first) { e.preventDefault(); last.focus() }
-  else if (!e.shiftKey && active === last) { e.preventDefault(); first.focus() }
-}
-
-onMounted(() => {
-  previouslyFocused = document.activeElement as HTMLElement | null
-  nextTick(() => (confirmBtn.value || cancelBtn.value)?.focus())
-  document.addEventListener('keydown', handleKeydown)
-})
-
-onUnmounted(() => {
-  document.removeEventListener('keydown', handleKeydown)
-  previouslyFocused?.focus?.()
-})
+const { focusInitial } = useDialogFocus(root, onCancel)
+// 危险操作默认聚焦「取消」更稳妥；普通操作聚焦「确认 / 主操作」
+focusInitial(els => els.find(el => el === (props.danger ? cancelBtn.value : confirmBtn.value)) ?? els[0])
 </script>
 
 <template>
