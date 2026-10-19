@@ -3,6 +3,7 @@ import { onMounted, ref, computed } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAppStore } from '@/stores/app'
 import { api } from '@/composables/useApi'
+import { useDialogFocus } from '@/composables/useDialogFocus'
 import ConfirmDialog from '@/components/ConfirmDialog.vue'
 import FolderTreeSelect from '@/components/FolderTreeSelect.vue'
 import type { Folder, Document, SearchResult } from '@/types'
@@ -34,6 +35,17 @@ const moveTargetFolderId = ref<number | null>(null)
 // 移动文件夹对话框（设置 parent_id）
 const moveFolderTarget = ref<{ id: number; name: string } | null>(null)
 const moveFolderParentId = ref<number | null>(null)
+
+// 窄屏侧栏抽屉开关
+const sidebarOpen = ref(false)
+
+// 内联弹窗焦点管理（复用 ConfirmDialog 同一套 Esc / Tab 圈定 / 焦点恢复逻辑）
+const newFolderRoot = ref<HTMLElement | null>(null)
+const moveDocRoot = ref<HTMLElement | null>(null)
+const moveFolderRoot = ref<HTMLElement | null>(null)
+useDialogFocus(newFolderRoot, cancelNewFolder)
+useDialogFocus(moveDocRoot, cancelMoveDoc)
+useDialogFocus(moveFolderRoot, cancelMoveFolder)
 
 /** 返回 folder_id 及其全部子孙文件夹 id（用于移动时排除，避免循环嵌套）。 */
 function folderDescendants(id: number): Set<number> {
@@ -141,6 +153,7 @@ onMounted(async () => {
 async function selectFolder(id: number) {
   store.currentFolderId = id
   expandPathTo(id)
+  sidebarOpen.value = false
   await store.loadDocuments(id)
 }
 
@@ -327,6 +340,38 @@ function clearSearch() {
   searchError.value = ''
 }
 
+/** 加载更多块命中结果（搜索结果分页：首屏仅默认一页，按需追加）。 */
+async function loadMoreSearch() {
+  const cur = searchResult.value
+  if (!cur || searching.value || cur.blocks.length >= cur.total) return
+  const q = searchQuery.value.trim()
+  const date = searchDate.value
+  const params = new URLSearchParams()
+  if (q) params.set('q', q)
+  if (date) params.set('date', date)
+  params.set('offset', String(cur.blocks.length))
+  searching.value = true
+  try {
+    const r = await api.get<SearchResult>(`/search?${params.toString()}`)
+    searchResult.value = {
+      total: r.total,
+      documents: cur.documents, // 文档名命中不分页，保留首屏结果
+      blocks: [...cur.blocks, ...r.blocks],
+    }
+  } catch {
+    // 加载更多失败时保留现有结果，不中断用户查看
+  } finally {
+    searching.value = false
+  }
+}
+
+/** 键盘打开：列表行获得焦点后，Enter/Space 触发对应操作。 */
+function openOnKey(e: KeyboardEvent, action: () => void) {
+  if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); action() }
+}
+function openDoc(id: number) { router.push(`/document/${id}`) }
+function openDocBlock(docId: number, blockId: number) { router.push(`/document/${docId}?block=${blockId}`) }
+
 /** 关键词高亮：按搜索词把文本拆成片段数组，命中的片段由模板渲染为 mark。 */
 function highlightParts(text: string): (string | { hit: string })[] {
   const terms = searchQuery.value.trim().split(/\s+/).filter(Boolean)
@@ -375,6 +420,7 @@ function relativeTime(ts: string): string {
 <template>
   <div class="home">
     <header class="home-header">
+      <button class="sidebar-toggle" @click="sidebarOpen = !sidebarOpen" :aria-expanded="sidebarOpen" aria-label="切换文件夹侧栏">☰</button>
       <h1>WorkMark</h1>
       <button class="att-entry" @click="router.push('/inbox')">快速记录</button>
       <button class="att-entry" @click="router.push('/attachments')">附件管理</button>
@@ -398,8 +444,9 @@ function relativeTime(ts: string): string {
     </div>
 
     <div class="home-body">
+      <div v-if="sidebarOpen" class="sidebar-backdrop" @click="sidebarOpen = false"></div>
       <!-- 文件夹侧栏 -->
-      <aside class="sidebar">
+      <aside class="sidebar" :class="{ open: sidebarOpen }">
         <div class="folder-crumb">
           <button class="crumb" :class="{ current: folderPath.length === 0 }" @click="defaultFolderId !== null && selectFolder(defaultFolderId)">文件夹</button>
           <template v-for="(f, i) in folderPath" :key="f.id">
@@ -413,7 +460,10 @@ function relativeTime(ts: string): string {
             :key="n.folder.id"
             :class="{ active: n.folder.id === store.currentFolderId }"
             :style="{ paddingLeft: (8 + n.depth * 16) + 'px' }"
+            role="button"
+            tabindex="0"
             @click="selectFolder(n.folder.id)"
+            @keydown="openOnKey($event, () => selectFolder(n.folder.id))"
           >
             <button
               class="folder-toggle"
@@ -468,7 +518,10 @@ function relativeTime(ts: string): string {
                 v-for="d in searchResult.documents"
                 :key="'doc-' + d.document_id"
                 class="doc-hit"
-                @click="router.push(`/document/${d.document_id}`)"
+                role="button"
+                tabindex="0"
+                @click="openDoc(d.document_id)"
+                @keydown="openOnKey($event, () => openDoc(d.document_id))"
               >
                 <span class="hit-doc-icon">📄</span>
                 <span class="hit-doc-name">{{ d.document_name }}</span>
@@ -482,7 +535,10 @@ function relativeTime(ts: string): string {
                 v-for="b in searchResult.blocks"
                 :key="'blk-' + b.block_id"
                 class="block-hit"
-                @click="router.push(`/document/${b.document_id}?block=${b.block_id}`)"
+                role="button"
+                tabindex="0"
+                @click="openDocBlock(b.document_id, b.block_id)"
+                @keydown="openOnKey($event, () => openDocBlock(b.document_id, b.block_id))"
               >
                 <div class="block-hit-head">
                   <span class="hit-doc-tag">{{ b.document_name }}</span>
@@ -497,6 +553,10 @@ function relativeTime(ts: string): string {
                 </div>
               </li>
             </ul>
+
+            <button v-if="searchResult.blocks.length < searchResult.total" class="load-more" @click="loadMoreSearch">
+              {{ searching ? '加载中…' : `加载更多（已显示 ${searchResult.blocks.length}/${searchResult.total}）` }}
+            </button>
           </template>
         </div>
 
@@ -515,7 +575,15 @@ function relativeTime(ts: string): string {
           </div>
         </div>
         <ul v-else class="doc-list">
-          <li v-for="doc in store.documents" :key="doc.id" class="doc-item" @click="router.push(`/document/${doc.id}`)">
+          <li
+            v-for="doc in store.documents"
+            :key="doc.id"
+            class="doc-item"
+            role="button"
+            tabindex="0"
+            @click="openDoc(doc.id)"
+            @keydown="openOnKey($event, () => openDoc(doc.id))"
+          >
             <input
               v-if="editingDocId === doc.id"
               v-model="editingDocName"
@@ -544,9 +612,9 @@ function relativeTime(ts: string): string {
     </div>
 
     <!-- 新建文件夹对话框 -->
-    <div v-if="showNewFolder" class="dialog-overlay" @click.self="cancelNewFolder">
+    <div v-if="showNewFolder" ref="newFolderRoot" class="dialog-overlay" role="dialog" aria-modal="true" aria-labelledby="new-folder-title" @click.self="cancelNewFolder">
       <div class="dialog">
-        <h3 class="dialog-title">新建文件夹</h3>
+        <h3 id="new-folder-title" class="dialog-title">新建文件夹</h3>
         <p class="dialog-message">在当前文件夹下创建子文件夹：</p>
         <input
           v-model="newFolderName"
@@ -576,9 +644,9 @@ function relativeTime(ts: string): string {
     />
 
     <!-- 移动文档对话框 -->
-    <div v-if="moveTargetDoc" class="dialog-overlay" @click.self="cancelMoveDoc">
+    <div v-if="moveTargetDoc" ref="moveDocRoot" class="dialog-overlay" role="dialog" aria-modal="true" aria-labelledby="move-doc-title" @click.self="cancelMoveDoc">
       <div class="dialog">
-        <h3 class="dialog-title">移动文档「{{ moveTargetDoc.name }}」到</h3>
+        <h3 id="move-doc-title" class="dialog-title">移动文档「{{ moveTargetDoc.name }}」到</h3>
         <p class="dialog-message">选择目标文件夹：</p>
         <FolderTreeSelect v-model="moveTargetFolderId" :folders="store.folders" />
         <div class="dialog-actions">
@@ -589,9 +657,9 @@ function relativeTime(ts: string): string {
     </div>
 
     <!-- 移动文件夹对话框 -->
-    <div v-if="moveFolderTarget" class="dialog-overlay" @click.self="cancelMoveFolder">
+    <div v-if="moveFolderTarget" ref="moveFolderRoot" class="dialog-overlay" role="dialog" aria-modal="true" aria-labelledby="move-folder-title" @click.self="cancelMoveFolder">
       <div class="dialog">
-        <h3 class="dialog-title">移动文件夹「{{ moveFolderTarget.name }}」到</h3>
+        <h3 id="move-folder-title" class="dialog-title">移动文件夹「{{ moveFolderTarget.name }}」到</h3>
         <p class="dialog-message">选择目标父文件夹（选择根级请留空）：</p>
         <FolderTreeSelect v-model="moveFolderParentId" :folders="store.folders" allow-root :disabled="folderMoveDisabled" />
         <div class="dialog-actions">
@@ -854,6 +922,43 @@ function relativeTime(ts: string): string {
 .block-hit-digest { color: var(--muted); font-size: 0.85rem; line-height: 1.6; }
 .block-hit-digest mark { background: rgba(176, 121, 22, 0.22); color: inherit; padding: 0 2px; border-radius: 3px; }
 
+/* 键盘可达行：聚焦时显示焦点环 */
+.doc-item:focus-visible,
+.doc-hit:focus-visible,
+.block-hit:focus-visible,
+.folder-list li:focus-visible {
+  outline: 2px solid var(--accent-line);
+  outline-offset: 2px;
+}
+
+/* 窄屏侧栏抽屉开关与遮罩（窄屏时由媒体查询启用） */
+.sidebar-toggle {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  width: 34px; height: 34px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--fg);
+  border-radius: 8px; font-size: 1rem;
+  cursor: pointer;
+}
+.sidebar-backdrop { display: none; }
+
+/* 搜索结果「加载更多」 */
+.load-more {
+  width: 100%;
+  padding: 10px;
+  border: 1px dashed var(--border);
+  background: transparent;
+  color: var(--accent);
+  border-radius: var(--radius);
+  cursor: pointer;
+  font-size: 0.88rem;
+  transition: background 0.15s, border-color 0.15s;
+}
+.load-more:hover { background: var(--accent-light); border-color: var(--accent-line); }
+
 /* 响应式：覆盖窄窗口 / 分屏 / 浏览器缩放（不主打手机，但不至于布局塌陷） */
 @media (max-width: 860px) {
   .sidebar { width: 200px; }
@@ -861,7 +966,24 @@ function relativeTime(ts: string): string {
   .search-bar { flex-wrap: wrap; }
 }
 @media (max-width: 640px) {
-  .sidebar { width: 168px; padding: 14px 10px; }
+  .sidebar-toggle { display: inline-flex; }
+  .sidebar {
+    position: fixed;
+    top: 0; bottom: 0; left: 0;
+    width: min(280px, 82vw);
+    padding: 16px 12px;
+    z-index: 1001;
+    transform: translateX(-100%);
+    transition: transform 0.24s ease;
+    box-shadow: 2px 0 16px rgba(35, 39, 43, 0.18);
+  }
+  .sidebar.open { transform: translateX(0); }
+  .sidebar-backdrop {
+    display: block;
+    position: fixed; inset: 0;
+    background: rgba(35, 39, 43, 0.3);
+    z-index: 1000;
+  }
   .content { padding: 20px 16px; }
   .home-header { padding: 12px 16px; }
   .search-bar { padding: 10px 16px; }
