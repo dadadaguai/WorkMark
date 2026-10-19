@@ -39,3 +39,7 @@ Desktop.ini
 
 # Logs
 *.log
+
+# 本地编辑器配置与个人文档（不入库）
+.trae/
+记录软件_PRD*.html

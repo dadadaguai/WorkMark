@@ -9,6 +9,9 @@ from flask_cors import CORS
 
 from backend.database import init_db, get_connection, DATA_DIR
 
+# 应用版本
+__version__ = "0.1.0"
+
 # 前端构建产物目录
 FRONTEND_DIST = Path(__file__).resolve().parent.parent / "frontend" / "dist"
 
@@ -55,7 +58,7 @@ app.register_blueprint(inbox.bp, url_prefix="/api/inbox")
 
 @app.route("/api/health")
 def health():
-    return jsonify({"status": "ok"})
+    return jsonify({"status": "ok", "version": __version__})
 
 
 # 前端静态文件（生产模式：构建产物由 Flask 直接提供）
