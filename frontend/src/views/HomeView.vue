@@ -94,11 +94,22 @@ async function handleNewDocument() {
   router.push(`/document/${doc.id}`)
 }
 
-async function handleNewFolder() {
-  if (!newFolderName.value) return
-  await store.createFolder(newFolderName.value, store.currentFolderId ?? undefined)
+function openNewFolder() {
+  newFolderName.value = ''
+  showNewFolder.value = true
+}
+
+function cancelNewFolder() {
   newFolderName.value = ''
   showNewFolder.value = false
+}
+
+async function handleNewFolder() {
+  const name = newFolderName.value.trim()
+  if (!name) return
+  await store.createFolder(name, store.currentFolderId ?? undefined)
+  showNewFolder.value = false
+  newFolderName.value = ''
   await store.loadFolders()
 }
 
@@ -346,12 +357,7 @@ function continueLastWork() {
             </span>
           </li>
         </ul>
-        <button v-if="!showNewFolder" @click="showNewFolder = true">+ 新建文件夹</button>
-        <div v-else class="new-folder-form">
-          <input v-model="newFolderName" placeholder="文件夹名称" @keyup.enter="handleNewFolder" />
-          <button class="primary" @click="handleNewFolder">确定</button>
-          <button @click="showNewFolder = false">取消</button>
-        </div>
+        <button @click="openNewFolder">+ 新建文件夹</button>
       </aside>
 
       <!-- 文档列表 / 搜索结果 -->
@@ -442,6 +448,26 @@ function continueLastWork() {
         </ul>
         </template>
       </main>
+    </div>
+
+    <!-- 新建文件夹对话框 -->
+    <div v-if="showNewFolder" class="dialog-overlay" @click.self="cancelNewFolder">
+      <div class="dialog">
+        <h3 class="dialog-title">新建文件夹</h3>
+        <p class="dialog-message">在当前文件夹下创建子文件夹：</p>
+        <input
+          v-model="newFolderName"
+          class="dialog-input"
+          placeholder="文件夹名称"
+          @keyup.enter="handleNewFolder"
+          @keyup.esc="cancelNewFolder"
+          v-focus
+        />
+        <div class="dialog-actions">
+          <button @click="cancelNewFolder">取消</button>
+          <button class="primary" @click="handleNewFolder">创建</button>
+        </div>
+      </div>
     </div>
 
     <!-- 删除确认对话框 -->
@@ -575,8 +601,7 @@ function continueLastWork() {
   border-radius: 4px;
   background: var(--bg);
 }
-.new-folder-form { display: flex; gap: 8px; flex-wrap: wrap; padding: 0 4px; }
-.new-folder-form input { flex: 1; }
+
 .content { flex: 1; padding: 28px 32px; overflow-y: auto; }
 .new-doc-bar { display: flex; gap: 8px; margin-bottom: 22px; }
 .new-doc-bar input { flex: 1; }
@@ -610,6 +635,7 @@ function continueLastWork() {
 .doc-actions { display: none; gap: 2px; }
 .doc-item:hover .doc-actions { display: flex; }
 .move-select { width: 100%; padding: 8px; margin-bottom: 12px; border: 1px solid var(--border); border-radius: var(--radius); font-size: 0.9rem; background: var(--bg); }
+.dialog-input { width: 100%; padding: 8px 10px; margin-bottom: 12px; border: 1px solid var(--border); border-radius: var(--radius); font-size: 0.9rem; background: var(--bg); }
 .dialog-overlay {
   position: fixed; inset: 0;
   background: rgba(35, 39, 43, 0.38);

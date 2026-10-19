@@ -10,7 +10,7 @@ def list_documents():
     folder_id = request.args.get("folder_id", type=int)
     if folder_id is not None:
         rows = g.db.execute(
-            "SELECT * FROM documents WHERE folder_id = ? ORDER BY sort_order, id", (folder_id,)
+            "SELECT * FROM documents WHERE folder_id = ? ORDER BY sort_order DESC, id DESC", (folder_id,)
         ).fetchall()
     else:
         rows = g.db.execute("SELECT * FROM documents ORDER BY updated_at DESC").fetchall()
