@@ -71,12 +71,40 @@ def _content_type_label(content: str) -> str:
     return "内容块"
 
 
+def _pure_text(title: str, content: str) -> str:
+    """块的可搜索纯文本：title + content JSON 中的正文值（不含字段名）。"""
+    parts: list[str] = []
+    if title:
+        parts.append(title)
+    try:
+        items = json.loads(content or "[]")
+        if isinstance(items, list):
+            for it in items:
+                if not isinstance(it, dict):
+                    continue
+                if it.get("content"):
+                    parts.append(str(it["content"]))
+                if it.get("rows"):
+                    for row in it["rows"]:
+                        parts.append(" | ".join(str(c) for c in row))
+                if it.get("items"):
+                    for i in it["items"]:
+                        if isinstance(i, dict) and i.get("text"):
+                            parts.append(str(i["text"]))
+                if it.get("text"):
+                    parts.append(str(it["text"]))
+    except (ValueError, TypeError):
+        pass
+    return "\n".join(p for p in parts if p and str(p).strip())
+
+
 @bp.get("")
 def search():
-    """全文搜索：块标题 + 块内容 + 文档名。
+    """全文搜索：块标题 + 块正文 + 文档名。
 
     参数：q（关键词，空格分隔多词 AND）、date（YYYY-MM-DD，按创建/工作开始日期过滤）、
     limit / offset（分页）。
+    在纯文本上匹配（避免误命中 content JSON 的字段名），全量扫描后分页（本地数据量小，不截断）。
     """
     q = (request.args.get("q") or "").strip()
     date = (request.args.get("date") or "").strip()
@@ -84,24 +112,28 @@ def search():
         return jsonify({"error": "q 或 date 至少提供一个"}), 400
     terms = [t for t in q.split() if t]
 
-    # 在数据库阶段完成筛选（不再于 Python 中截断前 500 块），避免超出 500 块后漏记录
-    conds, params = [], []
-    for t in terms:
-        conds.append("(title LIKE ? OR content LIKE ?)")
-        params += [f"%{t}%", f"%{t}%"]
-    if date:
-        conds.append("(created_at LIKE ? OR work_start_time LIKE ?)")
-        params += [f"{date}%", f"{date}%"]
-    where = (" WHERE " + " AND ".join(conds)) if conds else ""
-
     limit = max(1, min(request.args.get("limit", 200, type=int) or 200, 1000))
     offset = max(0, request.args.get("offset", 0, type=int) or 0)
 
-    total = g.db.execute(f"SELECT COUNT(*) FROM blocks{where}", params).fetchone()[0]
-    rows = g.db.execute(
-        f"SELECT * FROM blocks{where} ORDER BY document_id, sort_order, id LIMIT ? OFFSET ?",
-        params + [limit, offset],
+    # 全量读取并筛出纯文本命中（不截断，正确分页）
+    all_rows = g.db.execute(
+        "SELECT id, document_id, parent_id, title, content, created_at, work_start_time FROM blocks"
     ).fetchall()
+    matched = []
+    for r in all_rows:
+        if terms:
+            text = _pure_text(r["title"], r["content"]).lower()
+            if not all(t.lower() in text for t in terms):
+                continue
+        if date:
+            created = r["created_at"] or ""
+            work = r["work_start_time"] or ""
+            if not (created.startswith(date) or work.startswith(date)):
+                continue
+        matched.append(r)
+
+    total = len(matched)
+    rows = matched[offset:offset + limit]
 
     doc_names = {
         r["id"]: r["name"]
