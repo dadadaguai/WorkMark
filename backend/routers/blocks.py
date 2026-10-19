@@ -1,6 +1,7 @@
 """任务块 / 子块 CRUD 路由。"""
 
 import json
+from datetime import datetime
 
 from flask import Blueprint, request, jsonify, g
 
@@ -17,8 +18,15 @@ def normalize_content(content):
         return content
 
 
+_CONTENT_TYPES = {"text", "code", "shell", "output", "image", "todo", "table"}
+
+
 def _content_error(content):
-    """校验 content 为合法 JSON 数组；返回错误消息或 None。"""
+    """校验 content 为合法 JSON 数组，且元素为结构合法的内容块；返回错误消息或 None。
+
+    除拦截非法 JSON 外，还需保证数组元素是对象、type 为已知类型、字段类型正确，
+    避免异常数据写入数据库。
+    """
     if content is None:
         return None
     try:
@@ -27,13 +35,57 @@ def _content_error(content):
         return "content 必须是合法的 JSON 数组"
     if not isinstance(arr, list):
         return "content 必须是 JSON 数组"
+    for it in arr:
+        if not isinstance(it, dict):
+            return "content 数组元素必须是对象"
+        t = it.get("type")
+        if not isinstance(t, str) or t not in _CONTENT_TYPES:
+            return f"content 包含未知的内容块类型：{t!r}"
+        if "content" in it and it["content"] is not None and not isinstance(it["content"], str):
+            return "内容块的 content 必须是字符串"
+        if "language" in it and it["language"] is not None and not isinstance(it["language"], str):
+            return "内容块的 language 必须是字符串"
+        if "attachment_id" in it and it["attachment_id"] is not None and not isinstance(it["attachment_id"], int):
+            return "内容块的 attachment_id 必须是整数"
+        if "items" in it:
+            if not isinstance(it["items"], list):
+                return "待办内容块的 items 必须是数组"
+            for i in it["items"]:
+                if not isinstance(i, dict) or not isinstance(i.get("text"), str) or not isinstance(i.get("done"), bool):
+                    return "待办内容块的 items 元素必须含 text 字符串与 done 布尔值"
+        if "rows" in it:
+            if not isinstance(it["rows"], list):
+                return "表格内容块的 rows 必须是数组"
+            for row in it["rows"]:
+                if not isinstance(row, list) or not all(isinstance(c, str) for c in row):
+                    return "表格内容块的 rows 每行必须是字符串数组"
     return None
 
 
+def _datetime_error(value):
+    """校验时间字符串为合法日期时间（YYYY-MM-DD HH:MM 或含秒，兼容 T 分隔）；返回错误或 None。"""
+    if not value:
+        return None
+    s = str(value).replace("T", " ").strip()
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M"):
+        try:
+            datetime.strptime(s, fmt)
+            return None
+        except ValueError:
+            continue
+    return "时间格式无效（应为 YYYY-MM-DD HH:MM）"
+
+
 def _work_time_error(start, end):
-    """校验工作时段：结束时间不能早于开始时间。"""
-    if start and end and end < start:
-        return "结束时间不能早于开始时间"
+    """校验工作时段：时间格式合法，且结束时间不能早于开始时间。"""
+    for v, name in ((start, "开始"), (end, "结束")):
+        if v is not None and _datetime_error(v):
+            return f"{name}时间格式无效"
+    if start and end:
+        s = str(start).replace("T", " ").strip()[:19]
+        e = str(end).replace("T", " ").strip()[:19]
+        if e < s:
+            return "结束时间不能早于开始时间"
     return None
 
 
