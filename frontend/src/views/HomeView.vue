@@ -367,6 +367,9 @@ async function loadMoreSearch() {
 
 /** 键盘打开：列表行获得焦点后，Enter/Space 触发对应操作。 */
 function openOnKey(e: KeyboardEvent, action: () => void) {
+  // 事件源自行内输入框/按钮等交互元素时忽略，避免冒泡误触发打开
+  const t = e.target as HTMLElement | null
+  if (t && t.closest('button, input, textarea, select, a, [contenteditable]')) return
   if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); action() }
 }
 function openDoc(id: number) { router.push(`/document/${id}`) }
