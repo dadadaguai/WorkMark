@@ -156,7 +156,8 @@ def search():
             "digest": digest,
         })
 
-    # 文档名命中（块未命中的空文档也能被找到），日期条件同样生效
+    # 文档名命中（块未命中的空文档也能被找到），日期条件同样生效；
+    # 本地文档量小，全量返回，保证同名/相似文档不会被固定的 20 条上限遗漏
     doc_hits = []
     if terms:
         doc_conds = ["name LIKE ?" for _ in terms]
@@ -165,7 +166,7 @@ def search():
             doc_conds.append("created_at LIKE ?")
             doc_params.append(f"{date}%")
         docs = g.db.execute(
-            f"SELECT id, name, updated_at FROM documents WHERE {' AND '.join(doc_conds)} LIMIT 20",
+            f"SELECT id, name, updated_at FROM documents WHERE {' AND '.join(doc_conds)}",
             doc_params,
         ).fetchall()
         for d in docs:
