@@ -69,44 +69,81 @@ body {
   outline-offset: 1px;
 }
 
-/* ── 按钮：hairline + 小圆角 + 柔和过渡 ── */
+/* ── 按钮：现代 SaaS 风格（ghost 次级 + 实心渐变主按钮）── */
 button {
   cursor: pointer;
   font-family: inherit;
   font-size: 0.9rem;
+  font-weight: 500;
+  letter-spacing: 0.01em;
   border: 1px solid var(--border);
   background: var(--bg);
   color: var(--fg);
-  padding: 6px 15px;
-  border-radius: var(--radius);
-  transition: color 0.15s, border-color 0.15s, background 0.15s, box-shadow 0.15s, transform 0.15s;
+  padding: 8px 20px;
+  border-radius: 8px;
+  transition:
+    background 0.16s ease, border-color 0.16s ease, color 0.16s ease,
+    box-shadow 0.16s ease, transform 0.16s ease;
 }
 
 button:hover {
-  border-color: var(--border-strong);
   background: var(--bg-alt);
+  border-color: var(--border-strong);
+  box-shadow: 0 1px 3px rgba(38, 40, 44, 0.07);
 }
 
+button:active {
+  transform: translateY(1px) scale(0.99);
+  box-shadow: none;
+}
+
+/* 主按钮：无显式边框 + 纵向渐变 + 内高光 + 分层软投影 */
 button.primary {
-  background: var(--accent);
+  background: linear-gradient(180deg, #c05034 0%, #a63a24 100%);
   color: #fff;
-  border-color: var(--accent);
+  border-color: transparent;
+  font-weight: 600;
+  box-shadow:
+    0 1px 2px rgba(157, 58, 36, 0.3),
+    0 4px 14px rgba(157, 58, 36, 0.16),
+    inset 0 1px 0 rgba(255, 255, 255, 0.16);
 }
 button.primary:hover {
-  background: var(--accent-deep);
-  border-color: var(--accent-deep);
+  background: linear-gradient(180deg, #b5442c 0%, #97301f 100%);
+  border-color: transparent;
   color: #fff;
+  box-shadow:
+    0 2px 4px rgba(157, 58, 36, 0.3),
+    0 6px 20px rgba(157, 58, 36, 0.22),
+    inset 0 1px 0 rgba(255, 255, 255, 0.16);
+}
+button.primary:active {
+  transform: translateY(1px) scale(0.99);
+  box-shadow:
+    0 1px 2px rgba(157, 58, 36, 0.28),
+    inset 0 1px 0 rgba(255, 255, 255, 0.12);
 }
 
-button.primary:disabled { opacity: 0.5; cursor: default; transform: none; }
+button.primary:disabled { opacity: 0.5; cursor: default; transform: none; box-shadow: none; }
 button:disabled { cursor: default; }
 
-button.danger { color: var(--danger); border-color: rgba(197, 50, 43, 0.4); }
+/* 危险按钮：ghost 红，hover 实心 */
+button.danger {
+  color: var(--danger);
+  border-color: rgba(197, 50, 43, 0.32);
+  background: transparent;
+}
 
 button.danger:hover {
   color: #fff;
   background: var(--danger);
   border-color: var(--danger);
+  box-shadow: 0 4px 12px rgba(197, 50, 43, 0.24);
+}
+
+button.danger:active {
+  transform: translateY(1px) scale(0.99);
+  box-shadow: none;
 }
 
 /* ── 输入：hairline + 聚焦朱砂细环 ── */
