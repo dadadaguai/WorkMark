@@ -41,8 +41,9 @@ onMounted(async () => {
 
 // ── 快速添加（Ctrl+Enter 提交）──
 async function addItem() {
-  const content = draft.value.trim()
-  if (!content || adding.value) return
+  const content = draft.value
+  // 仅用 trim 判断是否为空；提交时保留原样首尾空白（粘贴保真）
+  if (!content.trim() || adding.value) return
   adding.value = true
   try {
     await api.post<InboxItem>('/inbox', { content })
