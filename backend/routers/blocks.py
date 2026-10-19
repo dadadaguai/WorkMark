@@ -17,6 +17,26 @@ def normalize_content(content):
         return content
 
 
+def _content_error(content):
+    """校验 content 为合法 JSON 数组；返回错误消息或 None。"""
+    if content is None:
+        return None
+    try:
+        arr = json.loads(content)
+    except (ValueError, TypeError):
+        return "content 必须是合法的 JSON 数组"
+    if not isinstance(arr, list):
+        return "content 必须是 JSON 数组"
+    return None
+
+
+def _work_time_error(start, end):
+    """校验工作时段：结束时间不能早于开始时间。"""
+    if start and end and end < start:
+        return "结束时间不能早于开始时间"
+    return None
+
+
 def _touch_document(document_id):
     """块内容变化时同步更新所属文档的 updated_at（内容更新时间）。"""
     g.db.execute(
@@ -69,6 +89,17 @@ def _attachment_ids_in_content(content):
             except (ValueError, TypeError):
                 pass
     return ids
+
+
+def _missing_attachment_ids(content):
+    """返回 content 中引用但不存在的 attachment_id（外键未命中会触发 500，改为预检）。"""
+    refs = _attachment_ids_in_content(content)
+    if not refs:
+        return []
+    ph = ",".join("?" * len(refs))
+    rows = g.db.execute(f"SELECT id FROM attachments WHERE id IN ({ph})", list(refs)).fetchall()
+    existing = {r["id"] for r in rows}
+    return sorted(refs - existing)
 
 
 def sync_block_attachments(block_id, content):
@@ -144,13 +175,27 @@ def create_block():
         ).fetchone()[0]
         sort_order = max_order + 1
 
-    content = normalize_content(body.get("content", "[]")) or "[]"
+    # 内容结构 / 工作时段 / 附件引用预检（明确 400，而非外键 500）
+    raw_content = body.get("content", "[]")
+    err = _content_error(raw_content)
+    if err:
+        return jsonify({"error": err}), 400
+    ws = body.get("work_start_time")
+    we = body.get("work_end_time")
+    err = _work_time_error(ws, we)
+    if err:
+        return jsonify({"error": err}), 400
+    content = normalize_content(raw_content) or "[]"
+    missing = _missing_attachment_ids(content)
+    if missing:
+        return jsonify({"error": f"引用的附件不存在：{missing}"}), 400
+
     cursor = g.db.execute(
         """INSERT INTO blocks (document_id, parent_id, title, content, sort_order, work_start_time, work_end_time)
            VALUES (?, ?, ?, ?, ?, ?, ?)""",
         (document_id, parent_id, body.get("title"),
          content,
-         sort_order, body.get("work_start_time"), body.get("work_end_time")),
+         sort_order, ws, we),
     )
     sync_block_attachments(cursor.lastrowid, content)
     _touch_document(document_id)
@@ -175,6 +220,9 @@ def update_block(block_id):
 
     body = request.get_json(force=True) or {}
     if "content" in body:
+        err = _content_error(body["content"])
+        if err:
+            return jsonify({"error": err}), 400
         body["content"] = normalize_content(body["content"])
 
     # 父子层级统一校验（普通更新允许改 parent_id）
@@ -182,6 +230,20 @@ def update_block(block_id):
         err = _hierarchy_error(row["document_id"], body["parent_id"], exclude_id=block_id)
         if err:
             return jsonify({"error": err}), 400
+
+    # 工作时段合并校验：结束时间不能早于开始时间（显式传 null 表示清空）
+    if "work_start_time" in body or "work_end_time" in body:
+        start = body.get("work_start_time", row["work_start_time"])
+        end = body.get("work_end_time", row["work_end_time"])
+        err = _work_time_error(start, end)
+        if err:
+            return jsonify({"error": err}), 400
+
+    # 附件引用预检
+    if "content" in body:
+        missing = _missing_attachment_ids(body["content"])
+        if missing:
+            return jsonify({"error": f"引用的附件不存在：{missing}"}), 400
 
     fields, values = [], []
     for f in ("title", "content", "parent_id", "sort_order", "work_start_time", "work_end_time"):
@@ -227,6 +289,16 @@ def reorder_blocks():
     meta = {r["id"]: r for r in rows}
     new_parent = {u["id"]: u.get("parent_id") for u in updates}
 
+    def final_parent_of(bid):
+        """块最终的父级：本次更新则取新值，否则取数据库当前值。"""
+        if bid in new_parent:
+            return new_parent[bid]
+        m = meta.get(bid)
+        if m is not None:
+            return m["parent_id"]
+        row = g.db.execute("SELECT parent_id FROM blocks WHERE id = ?", (bid,)).fetchone()
+        return row["parent_id"] if row else None
+
     # 统一校验：两层模型——最终父块必须是顶层块；禁止自引用/循环/跨文档/降级含子块的块
     for u in updates:
         bid = u["id"]
@@ -236,14 +308,19 @@ def reorder_blocks():
         if pid == bid:
             return jsonify({"error": f"块 {bid} 不能作为自身的子块"}), 400
         doc_id = meta[bid]["document_id"]
-        # 父块的“最终父级”：若本次也更新了它的 parent_id，则取新值，否则取其当前值
-        pid_final = new_parent.get(pid, meta[pid]["parent_id"] if pid in meta else None)
-        if pid_final is not None:
-            return jsonify({"error": f"父块 {pid} 最终不是顶层块，不能作为 {bid} 的父块"}), 400
-        if pid not in meta:
+        # 父块可能不在本次 updates 中，需查库取得其文档归属（此前只查 updates 内块导致真实父块误判为不存在）
+        pmeta = meta.get(pid)
+        if pmeta is None:
+            pmeta = g.db.execute(
+                "SELECT id, document_id, parent_id FROM blocks WHERE id = ?", (pid,)
+            ).fetchone()
+        if pmeta is None:
             return jsonify({"error": f"父块 {pid} 不存在"}), 404
-        if meta[pid]["document_id"] != doc_id:
+        if pmeta["document_id"] != doc_id:
             return jsonify({"error": f"块 {bid} 与父块 {pid} 不属于同一文档"}), 400
+        # 父块的“最终父级”：若本次也更新了它的 parent_id 则取新值，否则取其当前值
+        if final_parent_of(pid) is not None:
+            return jsonify({"error": f"父块 {pid} 最终不是顶层块，不能作为 {bid} 的父块"}), 400
         n = g.db.execute(
             "SELECT COUNT(*) FROM blocks WHERE parent_id = ?", (bid,)
         ).fetchone()[0]
